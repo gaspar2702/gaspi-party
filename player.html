@@ -79,7 +79,6 @@ body{
 .wait-answer-msg{text-align:center;padding:14px;background:var(--card);border-radius:16px;font-size:14px;color:var(--muted);font-weight:700;display:none;}
 .wait-answer-msg.show{display:block}
 
-/* Animación bonita de entrada para el feedback */
 @keyframes popInFeedback { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 .feedback-box{background:var(--card);border-radius:16px;padding:14px 16px;font-size:14px;line-height:1.5;display:none;border-left:4px solid var(--p4);}
 .feedback-box.show{display:block; animation: popInFeedback 0.4s cubic-bezier(.34,1.56,.64,1);}
@@ -103,7 +102,6 @@ body{
 
 <canvas id="player-confetti" style="position:fixed;inset:0;pointer-events:none;z-index:9999;"></canvas>
 
-<!-- JOIN -->
 <div class="screen" id="join">
   <div class="join-logo">🎲 Carrera contra<br>el <span class="ph">Phishing</span></div>
   <div class="join-card">
@@ -123,7 +121,6 @@ body{
   </div>
 </div>
 
-<!-- WAITING -->
 <div class="screen" id="waiting">
   <div class="wait-av" id="wait-av">🎮</div>
   <div class="wait-name" id="wait-name">¡Listo!</div>
@@ -131,7 +128,6 @@ body{
   <div class="players-mini" id="players-mini"></div>
 </div>
 
-<!-- SPECTATE -->
 <div class="screen" id="spectate">
   <div class="my-status-card">
     <div class="my-av-big" id="sp-av">🎮</div>
@@ -156,7 +152,6 @@ body{
   </div>
 </div>
 
-<!-- QUESTION -->
 <div class="screen" id="question">
   <div class="q-top">
     <div class="q-badge-sm" id="qsm-badge">Pregunta</div>
@@ -169,7 +164,6 @@ body{
   <div class="feedback-box" id="qsm-feedback"></div>
 </div>
 
-<!-- PENALTY -->
 <div class="screen" id="penalty">
   <div class="penalty-title">⚠️ ¡Reto Fallado!</div>
 
@@ -185,7 +179,6 @@ body{
   </div>
 </div>
 
-<!-- END -->
 <div class="screen" id="end">
   <div class="end-big" id="end-medal">🏅</div>
   <div class="end-title" id="end-title">¡Fin de la partida!</div>
@@ -473,6 +466,8 @@ function renderQuestionScreen(q){
     badge.textContent='⚔️ Desafío Todos'; badge.style.background='#ff9f43';
   } else if(q.tile_type === 'bad'){
     badge.textContent='💀 Peligro'; badge.style.background='#ff4757';
+  } else if(q.tile_type === 'star'){
+    badge.textContent='⭐ Bonus'; badge.style.background='#b8a4ff';
   } else {
     badge.textContent=TYPE_NAMES[q.category]||'Pregunta'; badge.style.background=TYPE_COLORS[q.category]||'#888';
   }
