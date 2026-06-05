@@ -32,6 +32,26 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
   letter-spacing:12px;text-shadow:0 0 30px rgba(255,211,42,0.5);line-height:1}
 .room-url{font-size:13px;color:var(--muted);margin-top:6px}
 .room-url span{color:var(--p2)}
+
+/* NUEVO: SELECTOR DE CATEGORÍA */
+.category-select {
+  background: var(--surface);
+  border: 2px solid var(--border);
+  color: var(--text);
+  font-family: 'Nunito', sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  padding: 10px 16px;
+  border-radius: 12px;
+  width: 100%;
+  margin-top: 18px;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  text-align: center;
+}
+.category-select:focus { border-color: var(--p2); }
+
 .lobby-players{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;max-width:900px}
 .lobby-player{background:var(--card);border:2px solid var(--border);border-radius:18px;
   padding:14px 20px;display:flex;align-items:center;gap:10px;
@@ -162,6 +182,16 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
     <div class="room-label">Código de sala</div>
     <div class="room-code" id="room-code">· · · ·</div>
     <div class="room-url">Abre <span id="player-url">player.html</span> en tu celular</div>
+    
+    <select class="category-select" id="category-select">
+      <option value="all">📚 Todas las categorías</option>
+      <option value="general">🌐 Conceptos Generales</option>
+      <option value="tipo">🦠 Tipos de ataque (Phishing/Malware)</option>
+      <option value="url">🔗 Inspección de URL</option>
+      <option value="defensa">🛡️ Estrategias de Defensa</option>
+      <option value="tecnico">💻 Conceptos Técnicos</option>
+    </select>
+
   </div>
   <div class="lobby-players" id="lobby-players">
     <div style="color:var(--muted);font-size:15px;padding:20px">Esperando jugadores… 🎮</div>
@@ -237,6 +267,7 @@ let revealDone = false;
 let skippedTurns = new Set();
 let lastProcessedRollKey = null;
 let revealLock = false;
+let gameCategory = 'all'; // Variable global para la categoría
 
 const BOARD_SIZE = 25;
 const WIN_CELL = 24;
@@ -294,6 +325,8 @@ function subscribeRealtime(){
 /* ─── SESSION CHANGE ─── */
 async function onSessionUpdate(sess){
   if(!sess) return;
+  
+  if(sess.category) gameCategory = sess.category; // Recupera la categoría en caso de F5
   if(Array.isArray(sess.skipped_turns)) skippedTurns = new Set(sess.skipped_turns);
   
   if(sess.current_question) {
@@ -400,8 +433,15 @@ function checkStartBtn(){ document.getElementById('start-btn').disabled = player
 async function startGame(){
   if(players.length < 2){ showToast('Se necesitan al menos 2 jugadores'); return; }
   
+  gameCategory = document.getElementById('category-select').value;
+  
   const { error } = await sb.from('game_sessions')
-    .update({ status: 'active', current_turn: 0, skipped_turns: [] })
+    .update({ 
+      status: 'active', 
+      current_turn: 0, 
+      skipped_turns: [],
+      category: gameCategory
+    })
     .eq('id', sessionId);
 
   if (error) { showToast('❌ Error DB: ' + error.message); return; }
@@ -538,7 +578,6 @@ async function processMove(playerId, steps){
 
   let tileTypeForQuestion=landedType;
   if(landedType==='bad'){
-    // EL JUGADOR YA NO RETROCEDE DE INMEDIATO. RESPONDE PRIMERO.
     showToast(`💀 ¡${p.name} cayó en peligro! Responde bien o retrocederás 2 casillas.`);
   }
 
@@ -564,15 +603,38 @@ async function triggerQuestion(tileType, playerId, playerName){
   await sb.from('players').update({answered:false, last_answer:null, last_correct:null}).eq('session_id', sessionId);
 
   let q=null;
+  
+  // Función auxiliar para traer preguntas filtradas
+  const fetchQuestions = async (excludeIds) => {
+    let query = sb.from('question_bank').select('*');
+    if (gameCategory !== 'all') query = query.eq('category', gameCategory);
+    if (excludeIds.length) query = query.not('id', 'in', `(${excludeIds.join(',')})`);
+    const { data } = await query.limit(100);
+    return data;
+  };
+
   if(usedQIds.length){
-    const {data}=await sb.from('question_bank').select('*').not('id','in',`(${usedQIds.join(',')})`).limit(100);
+    const data = await fetchQuestions(usedQIds);
     if(data?.length) q=data[Math.floor(Math.random()*data.length)];
   }
   if(!q){
-    const {data}=await sb.from('question_bank').select('*').limit(100);
-    if(data?.length){ q=data[Math.floor(Math.random()*data.length)]; usedQIds=[]; }
+    usedQIds=[]; // Si nos quedamos sin preguntas, reiniciamos la lista de usadas
+    const data = await fetchQuestions([]);
+    if(data?.length) q=data[Math.floor(Math.random()*data.length)];
   }
-  if(!q){ showToast('No hay preguntas disponibles'); await advanceTurn('active', true); return; }
+  if(!q){ 
+    // Fallback: Si la categoría seleccionada no tiene absolutamente ninguna pregunta en la DB
+    showToast('Categoría vacía, usando preguntas aleatorias...'); 
+    const {data} = await sb.from('question_bank').select('*').limit(100);
+    if(data?.length) q=data[Math.floor(Math.random()*data.length)];
+    
+    if(!q) {
+      showToast('Error crítico: No hay preguntas en la base de datos'); 
+      await advanceTurn('active', true); 
+      return;
+    }
+  }
+  
   usedQIds.push(q.id);
 
   const opts=typeof q.options==='string'?JSON.parse(q.options):q.options;
@@ -720,7 +782,6 @@ async function revealAnswer(){
           showToast(`✅ ¡${p.name} se salvó del peligro!`);
         }
       } else {
-        // PENALIDAD AL FALLAR EN CASILLA DE PELIGRO
         if(q.tile_type==='bad'){
           await sb.from('players').update({position: Math.max(0, freshPlayer.position-2)}).eq('id',p.id);
           showToast(`💀 ${p.name} falla y retrocede 2 casillas!`);
