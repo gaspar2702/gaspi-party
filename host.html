@@ -114,13 +114,21 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
 .ans-card{background:var(--surface);border:2px solid var(--border);border-radius:12px;
   padding:8px 12px;text-align:center;min-width:90px;transition:all 0.3s}
 .ans-card.answered{border-color:var(--p3);background:rgba(255,211,42,0.10)}
-.ans-card.correct{border-color:var(--p4);background:rgba(0,210,160,0.12)}
 .ans-card.wrong{border-color:var(--p1);background:rgba(255,71,87,0.12)}
 .ans-card.spectating{opacity:0.35;filter:grayscale(100%)}
 .ans-card .ac-av{font-size:22px}
 .ans-card .ac-name{font-size:10px;font-weight:700;margin-top:2px;max-width:80px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ans-card .ac-choice{font-family:'Fredoka One',cursive;font-size:15px;margin-top:2px}
+
+/* ANIMACIÓN RESPUESTA CORRECTA HOST */
+@keyframes correctPulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.1); box-shadow: 0 0 20px rgba(0,210,160,0.5); }
+  100% { transform: scale(1); }
+}
+.ans-card.correct{border-color:var(--p4);background:rgba(0,210,160,0.15); animation: correctPulse 0.5s ease-out;}
+
 .q-feedback{background:var(--surface);border-left:4px solid var(--p4);border-radius:0 12px 12px 0;
   padding:12px 14px;font-size:13px;line-height:1.5;margin-top:14px;display:none}
 .q-feedback.show{display:block}
@@ -155,6 +163,7 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
 </head>
 <body>
 
+<!-- LOBBY -->
 <div class="screen on" id="lobby">
   <div class="lobby-title">🎲 Carrera contra el <span class="ph">Phishing</span></div>
   <div class="room-card">
@@ -169,6 +178,7 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
   <div class="min-note">Mínimo 2 jugadores · Máximo 6 jugadores</div>
 </div>
 
+<!-- GAME -->
 <div class="screen" id="game">
   <div class="board-panel">
     <svg id="board-svg" viewBox="0 0 700 620" preserveAspectRatio="xMidYMid meet" width="100%" height="100%"></svg>
@@ -193,6 +203,7 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
   </div>
 </div>
 
+<!-- QUESTION OVERLAY -->
 <div id="q-overlay">
   <div class="q-box">
     <div class="q-header">
@@ -211,6 +222,7 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
   </div>
 </div>
 
+<!-- END -->
 <div class="screen" id="end-screen">
   <canvas class="confetti-layer" id="confetti-canvas"></canvas>
   <div class="end-title">🎉 ¡Fin de la Partida!</div>
@@ -340,7 +352,21 @@ async function onGameEvent(ev){
   if(ev.event_type === 'penalty_chosen'){
     const { player_id, choice } = ev.payload;
     
-    let sessionUpdates = {};
+    // PREVENCIÓN DE RACE CONDITION: Modificamos el array de forma sincrónica ANTES de consultar la DB
+    if (!currentQuestion || !currentQuestion.pending_penalties) return;
+    if (!currentQuestion.pending_penalties.includes(player_id)) return; // Evita doble-procesamiento
+    
+    currentQuestion.pending_penalties = currentQuestion.pending_penalties.filter(id => id !== player_id);
+    let sessionUpdates = { current_question: currentQuestion };
+
+    if(currentQuestion.pending_penalties.length === 0){
+      document.getElementById('q-next').className = 'q-next show';
+      const msg = document.getElementById('penalty-wait-msg');
+      if(msg) msg.innerHTML = '✅ Todos eligieron su castigo.';
+      const btn = document.getElementById('force-skip-penalty');
+      if(btn) btn.remove();
+      sessionUpdates.status = 'penalty_done';
+    }
 
     if(choice === 'star'){
       const { data: freshPlayer } = await sb.from('players').select('stars').eq('id', player_id).single();
@@ -350,24 +376,6 @@ async function onGameEvent(ev){
     } else {
       skippedTurns.add(player_id);
       sessionUpdates.skipped_turns = [...skippedTurns];
-    }
-
-    const { data: sess } = await sb.from('game_sessions')
-      .select('current_question').eq('id', sessionId).single();
-      
-    if(sess?.current_question){
-      let cq = sess.current_question;
-      cq.pending_penalties = (cq.pending_penalties||[]).filter(id => id !== player_id);
-      sessionUpdates.current_question = cq;
-
-      if(cq.pending_penalties.length === 0){
-        document.getElementById('q-next').className = 'q-next show';
-        const msg = document.getElementById('penalty-wait-msg');
-        if(msg) msg.innerHTML = '✅ Todos eligieron su castigo.';
-        const btn = document.getElementById('force-skip-penalty');
-        if(btn) btn.remove();
-        sessionUpdates.status = 'penalty_done';
-      }
     }
 
     if (Object.keys(sessionUpdates).length > 0) {
