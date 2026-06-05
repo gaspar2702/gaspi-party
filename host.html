@@ -118,7 +118,7 @@ body{
 .min-note{font-size:13px;color:var(--muted)}
 
 /* ══════════════════════════════════════════
-   GAME SCREEN — Mario Party layout
+   GAME SCREEN
 ══════════════════════════════════════════ */
 #game{
   flex-direction:row;
@@ -126,7 +126,6 @@ body{
   background:var(--bg);
 }
 
-/* LEFT: board map */
 .board-panel{
   flex:1;
   position:relative;
@@ -138,7 +137,6 @@ body{
 }
 #board-svg{width:100%;height:100%}
 
-/* RIGHT: sidebar */
 .sidebar{
   width:300px;
   background:var(--card);
@@ -191,7 +189,6 @@ body{
 .score-sub{font-size:11px;color:var(--muted)}
 .score-num{font-family:'Fredoka One',cursive;font-size:22px}
 
-/* Dice zone */
 .dice-zone{
   border-top:1px solid var(--border);
   padding-top:12px;
@@ -203,22 +200,7 @@ body{
 .turn-label{font-size:12px;color:var(--muted);letter-spacing:1px;text-transform:uppercase}
 .turn-name{font-family:'Fredoka One',cursive;font-size:22px;text-align:center}
 .dice-result{font-family:'Fredoka One',cursive;font-size:48px;min-height:60px;text-align:center;line-height:1}
-
-.dice-btn{
-  width:100%;
-  background:linear-gradient(135deg,var(--p3),#ff9d00);
-  color:#0d0d1a;
-  border:none;
-  font-family:'Fredoka One',cursive;
-  font-size:20px;
-  padding:14px;
-  border-radius:50px;
-  cursor:pointer;
-  box-shadow:0 6px 20px rgba(255,211,42,0.4);
-  transition:transform 0.15s;
-}
-.dice-btn:hover:not(:disabled){transform:scale(1.04)}
-.dice-btn:disabled{opacity:0.4;cursor:not-allowed}
+.dice-status-text{font-size:14px; color:var(--p2); font-weight:bold; text-align:center;}
 
 /* ══════════════════════════════════════════
    QUESTION OVERLAY
@@ -337,9 +319,9 @@ body{
   margin-top:12px;
 }
 .ans-chip{
-  padding:4px 10px;
+  padding:8px 16px;
   border-radius:50px;
-  font-size:12px;
+  font-size:16px;
   font-weight:700;
   border:2px solid transparent;
 }
@@ -452,15 +434,54 @@ body{
 }
 .toast.show{transform:translateX(-50%) translateY(0)}
 
-/* ── config panel (hidden, credentials embedded) ── */
-#config-panel{ display:none; }
+/* ── config panel ── */
+#config-panel{
+  position:fixed;top:16px;right:16px;
+  background:var(--card);
+  border:1px solid var(--border);
+  border-radius:16px;
+  padding:14px 20px;
+  z-index:800;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  font-size:13px;
+}
+#config-panel input{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:8px;
+  color:var(--text);
+  padding:6px 10px;
+  font-size:13px;
+  font-family:'Nunito',sans-serif;
+  width:220px;
+}
+#config-panel label{color:var(--muted);font-size:11px;margin-bottom:2px;display:block}
+.cfg-btn{
+  background:var(--p2);color:#0d0d1a;
+  border:none;border-radius:8px;
+  font-family:'Fredoka One',cursive;
+  font-size:14px;padding:8px 16px;
+  cursor:pointer;width:100%;
+}
 </style>
 </head>
 <body>
 
-<!-- credentials embedded — no config panel needed -->
+<div id="config-panel">
+  <div>
+    <label>Supabase URL</label>
+    <input id="cfg-url" placeholder="https://xxxx.supabase.co" value="https://zuyjbeyveiaepbsyvdwl.supabase.co">
+  </div>
+  <div>
+    <label>Supabase Anon Key</label>
+    <input id="cfg-key" placeholder="eyJ..." value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp1eWpiZXl2ZWlhZXBic3l2ZHdsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2MTM4OTUsImV4cCI6MjA5NjE4OTg5NX0.S8f9kmuoG6jiyRO40y56CEzH2NCnZxEUKfltIPhHRrQ" type="password">
+  </div>
+  <button class="cfg-btn" onclick="initSupabase()">🔗 Conectar</button>
+  <div id="cfg-status" style="font-size:11px;color:var(--muted);text-align:center"></div>
+</div>
 
-<!-- ══ LOBBY ══ -->
 <div class="screen on" id="lobby">
   <div class="lobby-title">🎲 Carrera contra<br>el <span class="phish">Phishing</span></div>
   <div class="room-card">
@@ -477,7 +498,6 @@ body{
   <div class="min-note">Mínimo 2 jugadores · Máximo 6 jugadores</div>
 </div>
 
-<!-- ══ GAME ══ -->
 <div class="screen" id="game">
   <div class="board-panel">
     <svg id="board-svg" viewBox="0 0 700 620" preserveAspectRatio="xMidYMid meet" width="100%" height="100%"></svg>
@@ -495,12 +515,11 @@ body{
       <div class="turn-label">Turno de</div>
       <div class="turn-name" id="turn-name" style="color:var(--p3)">—</div>
       <div class="dice-result" id="dice-result">🎲</div>
-      <button class="dice-btn" id="dice-btn" onclick="rollDice()" disabled>¡Tirar Dado!</button>
+      <div class="dice-status-text" id="dice-status">Esperando a que tire el dado...</div>
     </div>
   </div>
 </div>
 
-<!-- ══ QUESTION OVERLAY ══ -->
 <div id="q-overlay">
   <div class="q-box">
     <div class="q-timer">
@@ -511,7 +530,7 @@ body{
     <div class="q-text" id="q-text"></div>
     <div class="q-opts" id="q-opts"></div>
     <div class="q-waiting" id="q-waiting">
-      <div>📱 Esperando respuestas…</div>
+      <div>📱 Esperando respuesta del jugador...</div>
       <div class="answer-tally" id="answer-tally"></div>
     </div>
     <div class="q-feedback" id="q-feedback"></div>
@@ -519,7 +538,6 @@ body{
   </div>
 </div>
 
-<!-- ══ END ══ -->
 <div class="screen" id="end-screen">
   <canvas class="confetti-layer" id="confetti-canvas"></canvas>
   <div class="end-title">🎉 ¡Fin de la Partida!</div>
@@ -534,8 +552,6 @@ body{
    CONFIG & SUPABASE
 ═══════════════════════════════════════════════════════ */
 const { createClient } = supabase;
-const SUPABASE_URL = 'https://zuyjbeyveiaepbsyvdwl.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp1eWpiZXl2ZWlhZXBic3l2ZHdsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2MTM4OTUsImV4cCI6MjA5NjE4OTg5NX0.S8f9kmuoG6jiyRO40y56CEzH2NCnZxEUKfltIPhHRrQ';
 let sb = null;
 let sessionId = null;
 let roomCode = null;
@@ -545,7 +561,6 @@ let gameOver = false;
 let currentQuestion = null;
 let timerInterval = null;
 let timerSec = 30;
-let answeredCount = 0;
 let channel = null;
 
 const BOARD_SIZE = 25;
@@ -568,17 +583,19 @@ function buildCellTypes(){
 }
 
 async function initSupabase(){
+  const url = document.getElementById('cfg-url').value.trim();
+  const key = document.getElementById('cfg-key').value.trim();
+  if(!url || !key){ showToast('⚠️ Ingresa URL y clave'); return; }
   try {
-    sb = createClient(SUPABASE_URL, SUPABASE_KEY);
+    sb = createClient(url, key);
+    document.getElementById('cfg-status').textContent = '✅ Conectado';
+    document.getElementById('config-panel').style.opacity = '0.5';
     await createSession();
     subscribeRealtime();
   } catch(e){
-    showToast('❌ Error de conexión: '+e.message);
+    document.getElementById('cfg-status').textContent = '❌ Error: '+e.message;
   }
 }
-
-// Auto-connect on page load
-window.addEventListener('DOMContentLoaded', initSupabase);
 
 async function createSession(){
   const { data, error } = await sb.rpc('create_game_session', { p_host_name: 'Profesor' });
@@ -586,8 +603,7 @@ async function createSession(){
   sessionId = data.id;
   roomCode = data.room_code;
   document.getElementById('room-code').textContent = roomCode;
-  document.getElementById('player-url').textContent =
-    `${location.origin}/player.html?room=${roomCode}`;
+  document.getElementById('player-url').textContent = `${location.origin}/player.html?room=${roomCode}`;
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -607,13 +623,12 @@ async function onPlayersChange(payload){
   renderLobbyPlayers();
   renderScoreboard();
   renderPlayerTokens();
-  // update answered tally if question active
+  
   if(document.getElementById('q-overlay').classList.contains('open')){
     updateAnswerTally();
-    // auto-close if all answered
-    const active = players.filter(p=>p.is_active);
-    const answered = active.filter(p=>p.answered);
-    if(answered.length === active.length) {
+    const activePlayer = players[currentTurnIdx];
+    // Revelar automáticamente si el jugador actual responde y la respuesta no está ya revelada
+    if(activePlayer && activePlayer.answered && !document.getElementById('q-next').classList.contains('show')) {
       clearTimer();
       revealAnswer();
     }
@@ -626,8 +641,10 @@ async function onGameEvent(ev){
     showToast(`🎮 ${ev.payload.name} se unió!`);
   }
   if(ev.event_type === 'dice_rolled'){
-    await refreshPlayers();
-    animateDice(ev.payload.roll, ev.payload.player_id);
+    const activePlayer = players[currentTurnIdx];
+    if(activePlayer && ev.payload.player_id === activePlayer.id) {
+        animateDice(ev.payload.roll, ev.payload.player_id);
+    }
   }
 }
 
@@ -694,7 +711,6 @@ function drawBoard(){
     }
   }
 
-  // Connections
   for(let i=0;i<BOARD_SIZE-1;i++){
     if(!boardPositions[i]||!boardPositions[i+1]) continue;
     const line = makeSVG('line',{
@@ -705,7 +721,6 @@ function drawBoard(){
     svg.appendChild(line);
   }
 
-  // Cells
   for(let i=0;i<BOARD_SIZE;i++){
     const p = boardPositions[i];
     const type = CELL_TYPES[i];
@@ -720,7 +735,6 @@ function drawBoard(){
     const g = document.createElementNS('http://www.w3.org/2000/svg','g');
     g.id = `cell-${i}`;
 
-    // Glow for special cells
     if(type !== 'normal'){
       const glow = makeSVG('circle',{cx:p.x,cy:p.y,r:R+6,fill:fill,opacity:'0.25'});
       g.appendChild(glow);
@@ -779,7 +793,7 @@ function renderPlayerTokens(){
 }
 
 /* ═══════════════════════════════════════════════════════
-   SCOREBOARD
+   SCOREBOARD & TURN
 ═══════════════════════════════════════════════════════ */
 function renderScoreboard(){
   const list = document.getElementById('score-list');
@@ -798,12 +812,8 @@ function renderScoreboard(){
   }).join('');
 }
 
-/* ═══════════════════════════════════════════════════════
-   TURN & DICE
-═══════════════════════════════════════════════════════ */
 async function nextTurn(){
   if(gameOver) return;
-  // Reset answered flags
   await sb.from('players').update({answered:false,last_answer:null,last_correct:null}).eq('session_id',sessionId);
   await refreshPlayers();
   const p = players[currentTurnIdx];
@@ -811,30 +821,25 @@ async function nextTurn(){
   document.getElementById('turn-name').textContent = `${p.avatar} ${p.name}`;
   document.getElementById('turn-name').style.color = p.color;
   document.getElementById('dice-result').textContent = '🎲';
-  document.getElementById('dice-btn').disabled = false;
+  document.getElementById('dice-status').textContent = 'Esperando a que tire el dado...';
+  
   await sb.from('game_sessions').update({current_turn:currentTurnIdx}).eq('id',sessionId);
   renderScoreboard();
 }
 
-function rollDice(){
-  document.getElementById('dice-btn').disabled = true;
+function animateDice(finalRoll, playerId){
+  document.getElementById('dice-status').textContent = '¡Tirando el dado...!';
   const faces=['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣'];
-  let t=0, roll=0;
+  let t=0;
   const el = document.getElementById('dice-result');
-  const interval = setInterval(async ()=>{
+  const interval = setInterval(()=>{
     el.textContent = faces[Math.floor(Math.random()*6)];
     t++;
     if(t>14){
       clearInterval(interval);
-      roll = Math.floor(Math.random()*6)+1;
-      el.textContent = faces[roll-1];
-      await sb.from('game_events').insert({
-        session_id:sessionId,
-        player_id:players[currentTurnIdx]?.id,
-        event_type:'dice_rolled',
-        payload:{roll, player_id:players[currentTurnIdx]?.id}
-      });
-      setTimeout(()=>movePlayer(roll),600);
+      el.textContent = faces[finalRoll-1];
+      document.getElementById('dice-status').textContent = 'Moviendo...';
+      setTimeout(()=>movePlayer(finalRoll),600);
     }
   },80);
 }
@@ -877,7 +882,6 @@ async function movePlayer(steps){
 ═══════════════════════════════════════════════════════ */
 let usedQIds = [];
 async function showQuestion(isBad){
-  // Fetch a random question
   let query = sb.from('question_bank').select('*');
   if(usedQIds.length>0) query = query.not('id','in',`(${usedQIds.join(',')})`);
   const { data:qData } = await query.order('random()').limit(1);
@@ -892,7 +896,6 @@ async function showQuestion(isBad){
 
   currentQuestion = q;
 
-  // Save question to session
   await sb.from('game_sessions').update({
     status:'question',
     current_question: {
@@ -902,15 +905,7 @@ async function showQuestion(isBad){
     }
   }).eq('id',sessionId);
 
-  // Reset player answered states
   await sb.from('players').update({answered:false,last_answer:null}).eq('session_id',sessionId);
-
-  await sb.from('game_events').insert({
-    session_id:sessionId,
-    event_type:'question_shown',
-    payload:{question_id:q.id, is_bad:isBad}
-  });
-
   await refreshPlayers();
   renderQuestionOverlay(q, isBad);
 }
@@ -941,14 +936,15 @@ function renderQuestionOverlay(q, isBad){
 }
 
 function updateAnswerTally(){
+  const p = players[currentTurnIdx];
+  if(!p) return;
   const tally = document.getElementById('answer-tally');
-  tally.innerHTML = players.map(p=>`
+  tally.innerHTML = `
     <div class="ans-chip" style="border-color:${p.color};background:${p.answered?p.color:'transparent'};color:${p.answered?'#0d0d1a':p.color}">
-      ${p.avatar} ${p.answered?'✓':'…'}
-    </div>`).join('');
-  const answered = players.filter(p=>p.answered).length;
+      ${p.avatar} ${p.name} — ${p.answered ? '¡Respondido!' : 'Pensando...'}
+    </div>`;
   document.getElementById('q-waiting').querySelector('div').textContent =
-    `📱 Respondiendo… ${answered}/${players.length}`;
+    p.answered ? `📱 ¡Jugador listo!` : `📱 Esperando la respuesta de ${p.name}...`;
 }
 
 function startTimer(){
@@ -975,23 +971,22 @@ async function revealAnswer(){
   const q = currentQuestion;
   const opts = typeof q.options==='string'?JSON.parse(q.options):q.options;
 
-  // Highlight correct/wrong
   opts.forEach((_,i)=>{
     const el=document.getElementById(`qopt-${i}`);
     if(!el)return;
     if(i===q.correct_index) el.classList.add('correct');
   });
 
-  // Apply consequences to players
-  for(const p of players){
-    if(!p.answered) continue;
-    if(p.last_correct){
-      await sb.from('players').update({stars:p.stars+1}).eq('id',p.id);
-    } else {
-      const penPos = Math.max(0,p.position-2);
-      await sb.from('players').update({position:penPos}).eq('id',p.id);
-    }
+  const activePlayer = players[currentTurnIdx];
+  if(activePlayer) {
+      if(activePlayer.answered && activePlayer.last_correct){
+        await sb.from('players').update({stars:activePlayer.stars+1}).eq('id',activePlayer.id);
+      } else {
+        const penPos = Math.max(0,activePlayer.position-2);
+        await sb.from('players').update({position:penPos}).eq('id',activePlayer.id);
+      }
   }
+
   await refreshPlayers();
   renderScoreboard();
   renderPlayerTokens();
@@ -1003,11 +998,6 @@ async function revealAnswer(){
 
   document.getElementById('q-waiting').style.display='none';
   document.getElementById('q-next').className='q-next show';
-
-  await sb.from('game_events').insert({
-    session_id:sessionId, event_type:'question_closed',
-    payload:{correct_index:q.correct_index}
-  });
 }
 
 async function closeQuestion(){
@@ -1015,13 +1005,6 @@ async function closeQuestion(){
   await sb.from('game_sessions').update({status:'active',current_question:null}).eq('id',sessionId);
   currentTurnIdx = (currentTurnIdx+1)%players.length;
   setTimeout(nextTurn,300);
-}
-
-/* ═══════════════════════════════════════════════════════
-   DICE ANIMATION (from realtime event)
-═══════════════════════════════════════════════════════ */
-function animateDice(finalRoll, playerId){
-  // Host just shows the roll — actual move is done by host's rollDice()
 }
 
 /* ═══════════════════════════════════════════════════════
@@ -1053,9 +1036,6 @@ async function endGame(){
   launchConfetti();
 }
 
-/* ═══════════════════════════════════════════════════════
-   CONFETTI
-═══════════════════════════════════════════════════════ */
 function launchConfetti(){
   const canvas=document.getElementById('confetti-canvas');
   const ctx=canvas.getContext('2d');
@@ -1085,9 +1065,6 @@ function launchConfetti(){
   draw();
 }
 
-/* ═══════════════════════════════════════════════════════
-   TOAST
-═══════════════════════════════════════════════════════ */
 let toastTimer=null;
 function showToast(msg){
   const t=document.getElementById('toast');
