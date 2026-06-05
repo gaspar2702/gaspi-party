@@ -452,54 +452,13 @@ body{
 }
 .toast.show{transform:translateX(-50%) translateY(0)}
 
-/* ── config panel ── */
-#config-panel{
-  position:fixed;top:16px;right:16px;
-  background:var(--card);
-  border:1px solid var(--border);
-  border-radius:16px;
-  padding:14px 20px;
-  z-index:800;
-  display:flex;
-  flex-direction:column;
-  gap:8px;
-  font-size:13px;
-}
-#config-panel input{
-  background:var(--surface);
-  border:1px solid var(--border);
-  border-radius:8px;
-  color:var(--text);
-  padding:6px 10px;
-  font-size:13px;
-  font-family:'Nunito',sans-serif;
-  width:220px;
-}
-#config-panel label{color:var(--muted);font-size:11px;margin-bottom:2px;display:block}
-.cfg-btn{
-  background:var(--p2);color:#0d0d1a;
-  border:none;border-radius:8px;
-  font-family:'Fredoka One',cursive;
-  font-size:14px;padding:8px 16px;
-  cursor:pointer;width:100%;
-}
+/* ── config panel (hidden, credentials embedded) ── */
+#config-panel{ display:none; }
 </style>
 </head>
 <body>
 
-<!-- ── CONFIG (shown before everything) ── -->
-<div id="config-panel">
-  <div>
-    <label>Supabase URL</label>
-    <input id="cfg-url" placeholder="https://xxxx.supabase.co" value="">
-  </div>
-  <div>
-    <label>Supabase Anon Key</label>
-    <input id="cfg-key" placeholder="eyJ..." value="" type="password">
-  </div>
-  <button class="cfg-btn" onclick="initSupabase()">🔗 Conectar</button>
-  <div id="cfg-status" style="font-size:11px;color:var(--muted);text-align:center"></div>
-</div>
+<!-- credentials embedded — no config panel needed -->
 
 <!-- ══ LOBBY ══ -->
 <div class="screen on" id="lobby">
@@ -575,6 +534,8 @@ body{
    CONFIG & SUPABASE
 ═══════════════════════════════════════════════════════ */
 const { createClient } = supabase;
+const SUPABASE_URL = 'https://zuyjbeyveiaepbsyvdwl.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp1eWpiZXl2ZWlhZXBic3l2ZHdsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2MTM4OTUsImV4cCI6MjA5NjE4OTg5NX0.S8f9kmuoG6jiyRO40y56CEzH2NCnZxEUKfltIPhHRrQ';
 let sb = null;
 let sessionId = null;
 let roomCode = null;
@@ -607,19 +568,17 @@ function buildCellTypes(){
 }
 
 async function initSupabase(){
-  const url = document.getElementById('cfg-url').value.trim();
-  const key = document.getElementById('cfg-key').value.trim();
-  if(!url || !key){ showToast('⚠️ Ingresa URL y clave'); return; }
   try {
-    sb = createClient(url, key);
-    document.getElementById('cfg-status').textContent = '✅ Conectado';
-    document.getElementById('config-panel').style.opacity = '0.5';
+    sb = createClient(SUPABASE_URL, SUPABASE_KEY);
     await createSession();
     subscribeRealtime();
   } catch(e){
-    document.getElementById('cfg-status').textContent = '❌ Error: '+e.message;
+    showToast('❌ Error de conexión: '+e.message);
   }
 }
+
+// Auto-connect on page load
+window.addEventListener('DOMContentLoaded', initSupabase);
 
 async function createSession(){
   const { data, error } = await sb.rpc('create_game_session', { p_host_name: 'Profesor' });
