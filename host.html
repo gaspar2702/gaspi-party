@@ -73,6 +73,9 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
 .score-name{font-weight:800;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .score-sub{font-size:10px;color:var(--muted)}
 .score-num{font-family:'Fredoka One',cursive;font-size:20px}
+.score-delta{font-size:11px;font-weight:800;margin-left:4px;
+  animation:fadeUp 1.5s forwards}
+@keyframes fadeUp{0%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-18px)}}
 
 /* turn info box */
 .turn-info{border-top:1px solid var(--border);padding-top:10px;text-align:center}
@@ -101,18 +104,19 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
 .q-text{font-size:clamp(1rem,2.2vw,1.35rem);font-weight:800;line-height:1.4;margin-bottom:20px}
 .q-opts{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .q-opt{background:var(--surface);border:2px solid var(--border);border-radius:14px;
-  padding:12px 16px;font-size:13px;font-weight:700;line-height:1.4;position:relative}
+  padding:12px 16px;font-size:13px;font-weight:700;line-height:1.4;position:relative;transition:all 0.3s}
 .q-opt .opt-letter{font-family:'Fredoka One',cursive;font-size:17px;color:var(--muted);display:block;margin-bottom:3px}
-.q-opt.correct{border-color:var(--p4);background:rgba(0,210,160,0.15);color:var(--p4)}
-.q-opt.wrong{border-color:var(--p1);background:rgba(255,71,87,0.15)}
+.q-opt.correct{border-color:var(--p4);background:rgba(0,210,160,0.18);color:var(--p4);transform:scale(1.02)}
+.q-opt.wrong{border-color:var(--p1);background:rgba(255,71,87,0.12)}
 .q-tally-section{margin-top:16px;padding:14px;background:var(--surface);border-radius:14px}
 .q-tally-label{font-size:12px;color:var(--muted);margin-bottom:8px;text-align:center;font-weight:700}
 .q-answers-grid{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:10px}
 .ans-card{background:var(--surface);border:2px solid var(--border);border-radius:12px;
   padding:8px 12px;text-align:center;min-width:90px;transition:all 0.3s}
+.ans-card.answered{border-color:var(--p3);background:rgba(255,211,42,0.10)}
 .ans-card.correct{border-color:var(--p4);background:rgba(0,210,160,0.12)}
 .ans-card.wrong{border-color:var(--p1);background:rgba(255,71,87,0.12)}
-.ans-card.spectating{opacity:0.4;filter:grayscale(100%)}
+.ans-card.spectating{opacity:0.35;filter:grayscale(100%)}
 .ans-card .ac-av{font-size:22px}
 .ans-card .ac-name{font-size:10px;font-weight:700;margin-top:2px;max-width:80px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -226,20 +230,16 @@ const SUPABASE_URL = 'https://zuyjbeyveiaepbsyvdwl.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp1eWpiZXl2ZWlhZXBic3l2ZHdsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2MTM4OTUsImV4cCI6MjA5NjE4OTg5NX0.S8f9kmuoG6jiyRO40y56CEzH2NCnZxEUKfltIPhHRrQ';
 
 let sb, sessionId, roomCode;
-let players = [];
+let players = [];           // freshly fetched from DB each time
 let currentTurnIdx = 0;
 let gameOver = false;
-let currentQuestion = null;
+let currentQuestion = null; // always the full payload stored in game_sessions
 let timerInterval = null;
 let boardPositions = [];
 let revealDone = false;
-
-// skippedTurns is persisted in game_sessions.skipped_turns (JSON array of IDs)
-// We keep a local mirror for fast reads but always write back to DB
 let skippedTurns = new Set();
-
-// Guard against processing the same dice_rolled event twice
-let lastProcessedRoll = null; // { event_id, player_id, roll }
+let lastProcessedRollKey = null;
+let revealLock = false;     // prevents double-call to revealAnswer
 
 const BOARD_SIZE = 25;
 const WIN_CELL = 24;
@@ -289,100 +289,95 @@ function subscribeRealtime(){
     .subscribe((status)=>{
       if(status === 'CHANNEL_ERROR' || status === 'TIMED_OUT'){
         showToast('⚠️ Reconectando…');
-        setTimeout(()=>{ ch.unsubscribe(); subscribeRealtime(); }, 3000);
+        setTimeout(()=>{ try{ ch.unsubscribe(); }catch(e){} subscribeRealtime(); }, 3000);
       }
     });
 }
 
-/* ─── SESSION UPDATE (host watches game_sessions for penalty resolution etc.) ─── */
+/* ─── SESSION CHANGE (watches penalty resolution & turn advances) ─── */
 async function onSessionUpdate(sess){
   if(!sess) return;
-  // Sync skippedTurns from DB in case they were updated elsewhere
-  if(sess.skipped_turns){
-    skippedTurns = new Set(sess.skipped_turns);
-  }
-  // If status flipped back to 'active' from 'penalty', ensure next button is visible
-  if(sess.status === 'active' && document.getElementById('q-overlay').classList.contains('open')){
-    // penalty resolved - show next button if needed
-    const nextBtn = document.getElementById('q-next');
-    if(!nextBtn.classList.contains('show')) nextBtn.className = 'q-next show';
-    const waitMsg = document.getElementById('penalty-wait-msg');
-    if(waitMsg) waitMsg.innerHTML = '✅ Todos han elegido su penalización.';
-  }
+  if(Array.isArray(sess.skipped_turns)) skippedTurns = new Set(sess.skipped_turns);
+
+  // When all penalties are resolved the host itself sets status back to 'active'
+  // so the overlay next-button just needs to show up (penalty_chosen events handle it)
 }
 
+/* ─── PLAYERS CHANGED (answer arrived!) ─── */
 async function onPlayersUpdate(){
   await refreshPlayers();
   renderLobbyPlayers();
   renderScoreboard();
   renderPlayerTokens();
   if(document.getElementById('q-overlay').classList.contains('open')){
+    // Always re-render answer grid so teacher sees cards flip in real time
     renderAnswersGrid();
+    // Check if everyone who needed to answer has done so
     checkAllAnswered();
   }
   checkStartBtn();
 }
 
+/* ─── GAME EVENTS ─── */
 async function onGameEvent(ev){
   if(ev.event_type === 'player_joined'){
+    await refreshPlayers();
+    renderLobbyPlayers();
+    checkStartBtn();
     showToast(`🎮 ${ev.payload.name} se unió!`);
   }
 
   if(ev.event_type === 'dice_rolled'){
-    // Guard: ignore if already processed this roll or if it's not the current player's turn
-    const rollKey = ev.id || (ev.payload.player_id + '_' + ev.payload.roll + '_' + ev.created_at);
-    if(lastProcessedRoll === rollKey) return;
+    // Deduplicate: ignore if we already processed this exact roll
+    const rollKey = String(ev.id || (ev.payload.player_id+'_'+ev.payload.roll+'_'+(ev.inserted_at||ev.created_at||Date.now())));
+    if(lastProcessedRollKey === rollKey) return;
 
     await refreshPlayers();
     const currentPlayer = players[currentTurnIdx];
-    if(!currentPlayer || currentPlayer.id !== ev.payload.player_id){
-      // Not the current turn player — ignore stray event
-      return;
-    }
-    lastProcessedRoll = rollKey;
+    // Validate it's really the current player rolling
+    if(!currentPlayer || currentPlayer.id !== ev.payload.player_id) return;
+
+    lastProcessedRollKey = rollKey;
     animateDiceHost(ev.payload.roll, ev.payload.player_id);
   }
 
   if(ev.event_type === 'penalty_chosen'){
     const { player_id, choice } = ev.payload;
-
-    // Apply penalty
     await refreshPlayers();
+
+    // Apply the penalty using the LIVE star count from DB
     if(choice === 'star'){
       const p = players.find(x => x.id === player_id);
       if(p){
-        const newStars = Math.max(0, p.stars - 1);
-        await sb.from('players').update({stars: newStars}).eq('id', player_id);
+        await sb.from('players').update({stars: Math.max(0, p.stars - 1)}).eq('id', player_id);
       }
-    } else if(choice === 'turn'){
-      // Persist skipped turn to DB
+    } else {
       skippedTurns.add(player_id);
-      await persistSkippedTurns();
+      await sb.from('game_sessions').update({skipped_turns:[...skippedTurns]}).eq('id', sessionId);
     }
 
-    // Remove from pending_penalties list in DB
-    const { data: sess } = await sb.from('game_sessions').select('current_question,status').eq('id', sessionId).single();
-    if(sess && sess.current_question){
+    // Remove player from pending_penalties in DB
+    const { data: sess } = await sb.from('game_sessions')
+      .select('current_question').eq('id', sessionId).single();
+    if(sess?.current_question){
       let cq = sess.current_question;
-      if(!Array.isArray(cq.pending_penalties)) cq.pending_penalties = [];
-      cq.pending_penalties = cq.pending_penalties.filter(id => id !== player_id);
+      cq.pending_penalties = (cq.pending_penalties||[]).filter(id => id !== player_id);
       await sb.from('game_sessions').update({current_question: cq}).eq('id', sessionId);
 
       if(cq.pending_penalties.length === 0){
-        // All penalties resolved — show next button
+        // All penalties done — show the next-turn button
         document.getElementById('q-next').className = 'q-next show';
-        const waitMsg = document.getElementById('penalty-wait-msg');
-        if(waitMsg) waitMsg.innerHTML = '✅ Todos han elegido su penalización.';
+        const msg = document.getElementById('penalty-wait-msg');
+        if(msg) msg.innerHTML = '✅ Todos eligieron su castigo.';
+        await sb.from('game_sessions').update({status:'penalty_done'}).eq('id', sessionId);
       }
     }
+    await refreshPlayers();
     renderScoreboard();
   }
 }
 
-async function persistSkippedTurns(){
-  await sb.from('game_sessions').update({skipped_turns: [...skippedTurns]}).eq('id', sessionId);
-}
-
+/* ─── HELPERS ─── */
 async function refreshPlayers(){
   const { data } = await sb.from('players').select('*')
     .eq('session_id', sessionId).eq('is_active', true).order('turn_order');
@@ -406,12 +401,8 @@ function checkStartBtn(){ document.getElementById('start-btn').disabled = player
 
 async function startGame(){
   if(players.length < 2){ showToast('Se necesitan al menos 2 jugadores'); return; }
-  await sb.from('game_sessions').update({
-    status:'active',
-    current_turn:0,
-    skipped_turns:[]
-  }).eq('id', sessionId);
-  await sb.from('game_events').insert({session_id:sessionId, event_type:'game_started', payload:{}});
+  await sb.from('game_sessions').update({status:'active',current_turn:0,skipped_turns:[]}).eq('id',sessionId);
+  await sb.from('game_events').insert({session_id:sessionId,event_type:'game_started',payload:{}});
   document.getElementById('lobby').classList.remove('on');
   document.getElementById('game').classList.add('on');
   drawBoard();
@@ -428,12 +419,11 @@ function drawBoard(){
   const W=700,H=620,COLS=5,ROWS=Math.ceil(BOARD_SIZE/COLS),CW=W/COLS,CH=H/ROWS,R=28;
   boardPositions = [];
   for(let row=0;row<ROWS;row++){
-    const rev = row%2===1;
+    const rev=row%2===1;
     for(let col=0;col<COLS;col++){
-      const c = rev?COLS-1-col:col;
-      const idx = row*COLS+col;
+      const c=rev?COLS-1-col:col, idx=row*COLS+col;
       if(idx>=BOARD_SIZE) continue;
-      boardPositions[idx] = {x:c*CW+CW/2, y:row*CH+CH/2};
+      boardPositions[idx]={x:c*CW+CW/2, y:row*CH+CH/2};
     }
   }
   for(let i=0;i<BOARD_SIZE-1;i++){
@@ -456,10 +446,7 @@ function drawBoard(){
     if(type!=='normal') g.appendChild(mkEl('circle',{cx:p.x,cy:p.y,r:R+6,fill,opacity:'0.22'}));
     g.appendChild(mkEl('circle',{cx:p.x,cy:p.y,r:R,fill,stroke,'stroke-width':'2.5'}));
     if(emoji) g.appendChild(mkTxt(p.x,p.y+2,emoji,'22px','#fff'));
-    else {
-      const t=mkTxt(p.x,p.y+2,label,'13px','#7777aa');
-      t.setAttribute('font-weight','bold'); g.appendChild(t);
-    }
+    else { const t=mkTxt(p.x,p.y+2,label,'13px','#7777aa'); t.setAttribute('font-weight','bold'); g.appendChild(t); }
     svg.appendChild(g);
   }
   renderPlayerTokens();
@@ -505,283 +492,275 @@ function renderScoreboard(){
     </div>`).join('');
 }
 
-/* ─── TURN ─── */
+/* ─── TURN UI ─── */
 function setTurnUI(){
-  const p = players[currentTurnIdx];
+  const p=players[currentTurnIdx];
   if(!p) return;
-  const el = document.getElementById('turn-name');
-  el.textContent = `${p.avatar} ${p.name}`;
-  el.style.color = p.color;
-  document.getElementById('dice-display').textContent = '🎲';
-  document.getElementById('turn-hint').textContent = `Esperando que ${p.name} lance el dado desde su celular…`;
+  const el=document.getElementById('turn-name');
+  el.textContent=`${p.avatar} ${p.name}`;
+  el.style.color=p.color;
+  document.getElementById('dice-display').textContent='🎲';
+  document.getElementById('turn-hint').textContent=`Esperando que ${p.name} lance el dado…`;
   renderScoreboard();
 }
 
-/* ─── DICE ─── */
+/* ─── DICE ANIMATION ─── */
 function animateDiceHost(finalRoll, playerId){
-  const el = document.getElementById('dice-display');
+  const el=document.getElementById('dice-display');
   el.classList.add('rolling');
-  let t = 0;
-  const iv = setInterval(()=>{
-    el.textContent = DICE_FACES[Math.floor(Math.random()*6)];
+  let t=0;
+  const iv=setInterval(()=>{
+    el.textContent=DICE_FACES[Math.floor(Math.random()*6)];
     t++;
-    if(t > 12){
+    if(t>12){
       clearInterval(iv);
       el.classList.remove('rolling');
-      el.textContent = DICE_FACES[finalRoll-1];
-      document.getElementById('turn-hint').textContent = `¡Sacó un ${finalRoll}! Moviendo…`;
-      setTimeout(()=> processMove(playerId, finalRoll), 700);
+      el.textContent=DICE_FACES[finalRoll-1];
+      document.getElementById('turn-hint').textContent=`¡Sacó un ${finalRoll}! Moviendo…`;
+      setTimeout(()=>processMove(playerId,finalRoll),700);
     }
-  }, 80);
+  },80);
 }
 
 /* ─── MOVE ─── */
 async function processMove(playerId, steps){
   await refreshPlayers();
-  const p = players.find(pl=>pl.id===playerId);
+  const p=players.find(pl=>pl.id===playerId);
   if(!p) return;
 
-  let newPos = Math.min(p.position + steps, WIN_CELL);
-  const type = CELL_TYPES[newPos];
+  let newPos=Math.min(p.position+steps, WIN_CELL);
+  const landedType=CELL_TYPES[newPos];
 
-  // Apply bad-tile immediate penalty BEFORE question (move back 3 on landing)
-  let penaltyApplied = false;
-  if(type === 'bad'){
-    newPos = Math.max(0, newPos - 3);
-    penaltyApplied = true;
+  // BAD tile: move back 3 immediately on landing
+  let tileTypeForQuestion=landedType;
+  if(landedType==='bad'){
+    newPos=Math.max(0, newPos-3);
+    tileTypeForQuestion='bad';
     showToast(`💀 ¡${p.name} cayó en peligro! Retrocede 3 casillas.`);
   }
 
-  await sb.from('players').update({position: newPos}).eq('id', p.id);
+  await sb.from('players').update({position:newPos}).eq('id',p.id);
   await refreshPlayers();
   renderPlayerTokens();
   renderScoreboard();
 
-  if(newPos === WIN_CELL){ endGame(); return; }
+  if(newPos===WIN_CELL){ endGame(); return; }
 
-  // Determine actual cell type at new (possibly penalized) position
-  const actualType = CELL_TYPES[newPos];
+  const cellType=CELL_TYPES[newPos];
+  if(cellType==='start' || cellType==='end'){ await advanceTurn(); return; }
 
-  // start/end cells don't trigger questions
-  if(actualType === 'start' || actualType === 'end'){
-    await advanceTurn(); return;
-  }
-
-  setTimeout(()=> triggerQuestion(penaltyApplied ? 'bad' : actualType, p.id, p.name), 600);
+  setTimeout(()=>triggerQuestion(tileTypeForQuestion, p.id, p.name), 600);
 }
 
 /* ─── QUESTION ─── */
-let usedQIds = [];
+let usedQIds=[];
 async function triggerQuestion(tileType, playerId, playerName){
-  // Reset all player answers before the question
-  await sb.from('players').update({answered:false, last_answer:null, last_correct:null}).eq('session_id', sessionId);
+  revealDone=false;
+  revealLock=false;
 
-  let q;
+  // Reset all answered flags FIRST so the grid shows fresh state
+  await sb.from('players')
+    .update({answered:false, last_answer:null, last_correct:null})
+    .eq('session_id', sessionId);
+
+  // Fetch a question
+  let q=null;
   if(usedQIds.length){
-    const {data} = await sb.from('question_bank').select('*').not('id','in',`(${usedQIds.join(',')})`).limit(100);
-    if(data?.length) q = data[Math.floor(Math.random()*data.length)];
+    const {data}=await sb.from('question_bank').select('*').not('id','in',`(${usedQIds.join(',')})`).limit(100);
+    if(data?.length) q=data[Math.floor(Math.random()*data.length)];
   }
   if(!q){
-    const {data} = await sb.from('question_bank').select('*').limit(100);
-    if(data?.length){ q = data[Math.floor(Math.random()*data.length)]; usedQIds=[]; }
+    const {data}=await sb.from('question_bank').select('*').limit(100);
+    if(data?.length){ q=data[Math.floor(Math.random()*data.length)]; usedQIds=[]; }
   }
   if(!q){ showToast('No hay preguntas disponibles'); await advanceTurn(); return; }
-
   usedQIds.push(q.id);
-  currentQuestion = q;
-  revealDone = false;
 
-  // Normalize options to array once
-  const opts = typeof q.options === 'string' ? JSON.parse(q.options) : q.options;
-  const qPayload = {
-    ...q,
-    options: opts,
-    tile_type: tileType,
-    active_player: playerId,
-    active_player_name: playerName,
-    pending_penalties: []
+  const opts=typeof q.options==='string'?JSON.parse(q.options):q.options;
+  const qPayload={
+    ...q, options:opts,
+    tile_type:tileType,
+    active_player:playerId,
+    active_player_name:playerName,
+    pending_penalties:[]
   };
+  currentQuestion=qPayload;
 
-  await sb.from('game_sessions').update({status:'question', current_question: qPayload}).eq('id', sessionId);
+  // Publish to DB — this triggers player devices to show the question
+  await sb.from('game_sessions').update({status:'question', current_question:qPayload}).eq('id',sessionId);
 
   await refreshPlayers();
   showQuestionOverlay(qPayload);
 }
 
 function showQuestionOverlay(q){
-  const opts = Array.isArray(q.options) ? q.options : JSON.parse(q.options);
-  const badge = document.getElementById('q-badge');
-
-  if(q.tile_type === 'challenge'){
-    badge.textContent = `⚔️ DESAFÍO GLOBAL — ${TYPE_NAMES[q.category]||'Pregunta'}`;
-    badge.style.background = '#ff9f43';
-  } else if(q.tile_type === 'bad'){
-    badge.textContent = `💀 PELIGRO — ${TYPE_NAMES[q.category]||'Pregunta'}`;
-    badge.style.background = '#ff4757';
+  const opts=Array.isArray(q.options)?q.options:JSON.parse(q.options);
+  const badge=document.getElementById('q-badge');
+  if(q.tile_type==='challenge'){
+    badge.textContent=`⚔️ DESAFÍO GLOBAL — ${TYPE_NAMES[q.category]||'Pregunta'}`;
+    badge.style.background='#ff9f43';
+  } else if(q.tile_type==='bad'){
+    badge.textContent=`💀 PELIGRO — ${TYPE_NAMES[q.category]||'Pregunta'}`;
+    badge.style.background='#ff4757';
+  } else if(q.tile_type==='star'){
+    badge.textContent=`⭐ BONUS — Turno de ${q.active_player_name}`;
+    badge.style.background='#b8a4ff';
   } else {
-    badge.textContent = `Turno de ${q.active_player_name} — ${TYPE_NAMES[q.category]||'Pregunta'}`;
-    badge.style.background = TYPE_COLORS[q.category]||'#888';
+    badge.textContent=`Turno de ${q.active_player_name} — ${TYPE_NAMES[q.category]||'Pregunta'}`;
+    badge.style.background=TYPE_COLORS[q.category]||'#888';
   }
-
-  document.getElementById('q-text').textContent = `${q.emoji} ${q.question}`;
-  document.getElementById('q-opts').innerHTML = opts.map((opt,i)=>`
+  document.getElementById('q-text').textContent=`${q.emoji||''} ${q.question}`;
+  document.getElementById('q-opts').innerHTML=opts.map((opt,i)=>`
     <div class="q-opt" id="qh-${i}">
       <span class="opt-letter">${String.fromCharCode(65+i)}</span>${opt}
     </div>`).join('');
-
-  document.getElementById('q-feedback').className = 'q-feedback';
-  document.getElementById('q-next').className = 'q-next';
+  document.getElementById('q-feedback').className='q-feedback';
+  document.getElementById('q-next').className='q-next';
   renderAnswersGrid();
   startTimer();
   document.getElementById('q-overlay').classList.add('open');
 }
 
+/* ─── ANSWERS GRID (live, shows as soon as answers arrive) ─── */
 function renderAnswersGrid(){
-  const grid = document.getElementById('answers-grid');
-  const q = currentQuestion;
-  if(!q) return;
-  const isChallenge = q.tile_type === 'challenge';
+  const grid=document.getElementById('answers-grid');
+  const q=currentQuestion;
+  if(!q){grid.innerHTML='';return;}
+  const isChallenge=q.tile_type==='challenge';
 
-  let requiredCount = isChallenge ? players.length : 1;
-  let answeredCount = players.filter(p =>
-    isChallenge ? p.answered : (p.id === q.active_player && p.answered)
-  ).length;
+  const required=isChallenge?players:players.filter(p=>p.id===q.active_player);
+  const answered=required.filter(p=>p.answered);
 
   document.getElementById('tally-label').textContent = revealDone
-    ? `Resultados`
-    : `📱 Esperando respuestas… ${answeredCount}/${requiredCount}`;
+    ? 'Resultados'
+    : `📱 ${answered.length}/${required.length} respondieron`;
 
-  grid.innerHTML = players.map(p=>{
-    const isSpectating = !isChallenge && p.id !== q.active_player;
-    if(isSpectating){
-      return `<div class="ans-card spectating">
-        <div class="ac-av">${p.avatar}</div>
-        <div class="ac-name" style="color:${p.color}">Espectador</div>
-      </div>`;
-    }
-    if(!p.answered){
-      return `<div class="ans-card waiting">
-        <div class="ac-av">${p.avatar}</div>
-        <div class="ac-name" style="color:${p.color}">${p.name}</div>
-        <div class="ac-choice" style="color:var(--muted)">…</div>
-      </div>`;
-    }
-    const letter = p.last_answer != null ? String.fromCharCode(65+p.last_answer) : '—';
-    const cls = revealDone ? (p.last_correct?'correct':'wrong') : 'answered';
+  grid.innerHTML=players.map(p=>{
+    const isSpectating=!isChallenge && p.id!==q.active_player;
+    if(isSpectating) return `<div class="ans-card spectating">
+      <div class="ac-av">${p.avatar}</div>
+      <div class="ac-name" style="color:${p.color}">Espectador</div>
+    </div>`;
+
+    if(!p.answered) return `<div class="ans-card">
+      <div class="ac-av">${p.avatar}</div>
+      <div class="ac-name" style="color:${p.color}">${p.name}</div>
+      <div class="ac-choice" style="color:var(--muted)">…</div>
+    </div>`;
+
+    // Player has answered — show their letter immediately (even before reveal)
+    const letter=p.last_answer!=null?String.fromCharCode(65+p.last_answer):'?';
+    // After reveal: colour correct/wrong. Before reveal: yellow "answered"
+    const cls=revealDone?(p.last_correct?'correct':'wrong'):'answered';
     return `<div class="ans-card ${cls}">
       <div class="ac-av">${p.avatar}</div>
       <div class="ac-name" style="color:${p.color}">${p.name}</div>
-      <div class="ac-choice">${letter}</div>
+      <div class="ac-choice">${revealDone?letter:'✓'}</div>
     </div>`;
   }).join('');
 }
 
+/* ─── CHECK IF DONE ─── */
 function checkAllAnswered(){
-  if(revealDone) return;
-  const q = currentQuestion;
+  if(revealDone||revealLock) return;
+  const q=currentQuestion;
   if(!q) return;
-  const isChallenge = q.tile_type === 'challenge';
-  const required = isChallenge
-    ? players
-    : players.filter(p => p.id === q.active_player);
-  if(required.length && required.every(p => p.answered)){
+  const isChallenge=q.tile_type==='challenge';
+  const required=isChallenge?players:players.filter(p=>p.id===q.active_player);
+  if(required.length>0 && required.every(p=>p.answered)){
     clearInterval(timerInterval);
     revealAnswer();
   }
 }
 
+/* ─── TIMER ─── */
 function startTimer(){
-  let sec = 30;
+  let sec=30;
   clearInterval(timerInterval);
   document.getElementById('timer-bar').style.width='100%';
   document.getElementById('timer-val').textContent='30';
-  timerInterval = setInterval(()=>{
+  timerInterval=setInterval(()=>{
     sec--;
-    document.getElementById('timer-bar').style.width = (sec/30*100)+'%';
-    document.getElementById('timer-val').textContent = sec;
+    document.getElementById('timer-bar').style.width=(sec/30*100)+'%';
+    document.getElementById('timer-val').textContent=sec;
     if(sec<=0){ clearInterval(timerInterval); revealAnswer(); }
   },1000);
 }
 
+/* ─── REVEAL ANSWER & APPLY REWARDS/PENALTIES ─── */
 async function revealAnswer(){
-  if(revealDone) return;
-  revealDone = true;
+  if(revealDone||revealLock) return;
+  revealLock=true;   // block any re-entrant call
+  revealDone=true;
   clearInterval(timerInterval);
+
+  // Always get the FRESHEST player data right before computing rewards
   await refreshPlayers();
 
-  const q = currentQuestion;
-  const opts = Array.isArray(q.options) ? q.options : JSON.parse(q.options);
+  const q=currentQuestion;
+  const opts=Array.isArray(q.options)?q.options:JSON.parse(q.options);
 
-  // Highlight correct answer
+  // Highlight correct option on teacher screen
   opts.forEach((_,i)=>{
     const el=document.getElementById(`qh-${i}`);
-    if(el && i===q.correct_index) el.classList.add('correct');
+    if(el) el.classList.toggle('correct', i===q.correct_index);
   });
 
-  let pendingPenalties = [];
+  let pendingPenalties=[];
 
   for(const p of players){
-    if(q.tile_type === 'challenge'){
-      // Challenge: all players who answered correctly get +1 star
-      // Those who answered wrong (or didn't answer) get penalized
-      if(p.answered && p.last_correct){
+    if(q.tile_type==='challenge'){
+      if(p.answered && p.last_correct===true){
+        // FIX: use p.stars from the freshly fetched array
         await sb.from('players').update({stars: p.stars+1}).eq('id',p.id);
-      } else if(p.answered && !p.last_correct){
-        // Only answered players who got it wrong face the penalty choice
-        pendingPenalties.push(p.id);
-      }
-      // Players who didn't answer (timed out on challenge) also get penalized
-      else if(!p.answered){
-        pendingPenalties.push(p.id);
-      }
-    } else if(p.id === q.active_player){
-      if(p.last_correct){
-        if(q.tile_type === 'star'){
-          await sb.from('players').update({stars: p.stars+1}).eq('id',p.id);
-        }
-        if(q.tile_type === 'normal'){
-          await sb.from('players').update({position: Math.min(WIN_CELL, p.position+1)}).eq('id',p.id);
-        }
-        // For 'bad' tile: correct answer means NO extra penalty (they already moved back 3 on landing)
+        showToast(`⭐ ${p.name} +1 estrella!`);
       } else {
-        // Wrong answer on bad tile: extra -2 positions
-        if(q.tile_type === 'bad'){
+        // Wrong answer OR timed-out on challenge → penalty choice
+        pendingPenalties.push(p.id);
+      }
+    } else if(p.id===q.active_player){
+      if(p.last_correct===true){
+        if(q.tile_type==='star'){
+          await sb.from('players').update({stars: p.stars+1}).eq('id',p.id);
+          showToast(`⭐ ${p.name} gana +1 estrella bonus!`);
+        } else if(q.tile_type==='normal'){
+          await sb.from('players').update({position: Math.min(WIN_CELL, p.position+1)}).eq('id',p.id);
+          showToast(`✅ ${p.name} avanza 1 casilla extra!`);
+        }
+        // bad tile + correct answer = no extra penalty (already moved back 3)
+      } else {
+        if(q.tile_type==='bad'){
           await sb.from('players').update({position: Math.max(0, p.position-2)}).eq('id',p.id);
-          showToast(`💀 ${p.name} falló y retrocede 2 más!`);
+          showToast(`💀 ${p.name} falla y retrocede 2 más!`);
         }
       }
     }
   }
 
+  // Refresh again to get updated stars/positions into scoreboard
   await refreshPlayers();
   renderScoreboard();
   renderPlayerTokens();
-  renderAnswersGrid();
+  renderAnswersGrid(); // now shows correct/wrong colours
 
-  const fb = document.getElementById('q-feedback');
-  fb.innerHTML = `✅ <strong>Respuesta correcta: ${String.fromCharCode(65+q.correct_index)}) ${opts[q.correct_index]}</strong><br><span style="opacity:0.8">${q.explanation}</span>`;
+  // Build feedback line
+  const fb=document.getElementById('q-feedback');
+  fb.innerHTML=`✅ <strong>${String.fromCharCode(65+q.correct_index)}) ${opts[q.correct_index]}</strong><br><span style="opacity:0.8">${q.explanation||''}</span>`;
 
-  if(pendingPenalties.length > 0){
-    fb.innerHTML += `<div id="penalty-wait-msg" style="margin-top:14px;color:#ff9f43;font-weight:bold;">⚠️ Esperando que perdedores elijan su penalización… (${pendingPenalties.length} jugador/es)</div>`;
-    // Hide next button until all penalties are chosen
-    document.getElementById('q-next').className = 'q-next';
-    // Update session with pending penalties and status
-    const updatedQ = { ...q, options: opts, pending_penalties: pendingPenalties };
-    await sb.from('game_sessions').update({
-      status: 'penalty',
-      current_question: updatedQ
-    }).eq('id', sessionId);
+  if(pendingPenalties.length>0){
+    fb.innerHTML+=`<div id="penalty-wait-msg" style="margin-top:14px;color:var(--p7);font-weight:bold;">
+      ⚠️ Esperando que ${pendingPenalties.length} jugador/es elijan su penalización…
+    </div>`;
+    document.getElementById('q-next').className='q-next'; // hide until done
+    const updatedQ={...q, options:opts, pending_penalties:pendingPenalties};
+    currentQuestion=updatedQ;
+    // status=penalty so player devices know to show penalty screen
+    await sb.from('game_sessions').update({status:'penalty', current_question:updatedQ}).eq('id',sessionId);
   } else {
-    document.getElementById('q-next').className = 'q-next show';
-    // Keep status as question (not active yet — host clicks next)
+    document.getElementById('q-next').className='q-next show';
   }
 
-  fb.className = 'q-feedback show';
-  await sb.from('game_events').insert({
-    session_id: sessionId,
-    event_type: 'question_closed',
-    payload: { correct_index: q.correct_index }
-  });
+  fb.className='q-feedback show';
 }
 
 async function closeQuestion(){
@@ -791,46 +770,40 @@ async function closeQuestion(){
   await advanceTurn();
 }
 
+/* ─── ADVANCE TURN ─── */
 async function advanceTurn(){
-  // Safety: reload skipped_turns from DB to avoid stale local state
-  const { data: sess } = await sb.from('game_sessions').select('skipped_turns,current_turn').eq('id', sessionId).single();
+  // Re-read skipped turns from DB
+  const {data:sess}=await sb.from('game_sessions').select('skipped_turns,current_turn').eq('id',sessionId).single();
   if(sess){
-    skippedTurns = new Set(sess.skipped_turns || []);
-    currentTurnIdx = sess.current_turn ?? currentTurnIdx;
+    skippedTurns=new Set(sess.skipped_turns||[]);
+    currentTurnIdx=sess.current_turn??currentTurnIdx;
   }
 
-  const total = players.length;
-  if(total === 0) return;
+  const total=players.length;
+  if(!total) return;
 
-  let attempts = 0;
-  do {
-    currentTurnIdx = (currentTurnIdx + 1) % total;
-    attempts++;
-    if(attempts > total){
-      // All players are skipped — clear all skips and proceed normally
-      skippedTurns.clear();
-      await sb.from('game_sessions').update({skipped_turns:[]}).eq('id', sessionId);
-      break;
-    }
-    const candidate = players[currentTurnIdx];
-    if(candidate && skippedTurns.has(candidate.id)){
-      skippedTurns.delete(candidate.id);
-      await persistSkippedTurns();
-      showToast(`⏭️ ${candidate.name} pierde su turno por penalización.`);
-    } else {
-      break;
-    }
-  } while(true);
+  let tries=0;
+  do{
+    currentTurnIdx=(currentTurnIdx+1)%total;
+    tries++;
+    if(tries>total){ skippedTurns.clear(); await sb.from('game_sessions').update({skipped_turns:[]}).eq('id',sessionId); break; }
+    const c=players[currentTurnIdx];
+    if(c && skippedTurns.has(c.id)){
+      skippedTurns.delete(c.id);
+      await sb.from('game_sessions').update({skipped_turns:[...skippedTurns]}).eq('id',sessionId);
+      showToast(`⏭️ ${c.name} pierde su turno.`);
+    } else { break; }
+  }while(true);
 
-  await sb.from('game_sessions').update({current_turn: currentTurnIdx}).eq('id', sessionId);
+  await sb.from('game_sessions').update({current_turn:currentTurnIdx}).eq('id',sessionId);
   await refreshPlayers();
   setTurnUI();
 }
 
-/* ─── END ─── */
+/* ─── END GAME ─── */
 async function endGame(){
   if(gameOver) return;
-  gameOver = true;
+  gameOver=true;
   await sb.from('game_sessions').update({status:'ended'}).eq('id',sessionId);
   document.getElementById('game').classList.remove('on');
   document.getElementById('end-screen').classList.add('on');
