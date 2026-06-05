@@ -155,7 +155,6 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
 </head>
 <body>
 
-<!-- LOBBY -->
 <div class="screen on" id="lobby">
   <div class="lobby-title">🎲 Carrera contra el <span class="ph">Phishing</span></div>
   <div class="room-card">
@@ -170,7 +169,6 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
   <div class="min-note">Mínimo 2 jugadores · Máximo 6 jugadores</div>
 </div>
 
-<!-- GAME -->
 <div class="screen" id="game">
   <div class="board-panel">
     <svg id="board-svg" viewBox="0 0 700 620" preserveAspectRatio="xMidYMid meet" width="100%" height="100%"></svg>
@@ -195,7 +193,6 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
   </div>
 </div>
 
-<!-- QUESTION OVERLAY -->
 <div id="q-overlay">
   <div class="q-box">
     <div class="q-header">
@@ -214,7 +211,6 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
   </div>
 </div>
 
-<!-- END -->
 <div class="screen" id="end-screen">
   <canvas class="confetti-layer" id="confetti-canvas"></canvas>
   <div class="end-title">🎉 ¡Fin de la Partida!</div>
@@ -230,7 +226,7 @@ const SUPABASE_URL = 'https://zuyjbeyveiaepbsyvdwl.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp1eWpiZXl2ZWlhZXBic3l2ZHdsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2MTM4OTUsImV4cCI6MjA5NjE4OTg5NX0.S8f9kmuoG6jiyRO40y56CEzH2NCnZxEUKfltIPhHRrQ';
 
 let sb, sessionId, roomCode;
-let players = [];           // freshly fetched from DB each time
+let players = [];            // freshly fetched from DB each time
 let currentTurnIdx = 0;
 let gameOver = false;
 let currentQuestion = null; // always the full payload stored in game_sessions
@@ -294,13 +290,18 @@ function subscribeRealtime(){
     });
 }
 
-/* ─── SESSION CHANGE (watches penalty resolution & turn advances) ─── */
+/* ─── SESSION CHANGE ─── */
 async function onSessionUpdate(sess){
   if(!sess) return;
   if(Array.isArray(sess.skipped_turns)) skippedTurns = new Set(sess.skipped_turns);
-
-  // When all penalties are resolved the host itself sets status back to 'active'
-  // so the overlay next-button just needs to show up (penalty_chosen events handle it)
+  
+  // Mantiene sincronizada la pregunta actual para checkAllAnswered y renderAnswersGrid
+  if(sess.current_question) {
+    currentQuestion = sess.current_question;
+    if(document.getElementById('q-overlay').classList.contains('open')) {
+      renderAnswersGrid();
+    }
+  }
 }
 
 /* ─── PLAYERS CHANGED (answer arrived!) ─── */
@@ -310,9 +311,7 @@ async function onPlayersUpdate(){
   renderScoreboard();
   renderPlayerTokens();
   if(document.getElementById('q-overlay').classList.contains('open')){
-    // Always re-render answer grid so teacher sees cards flip in real time
     renderAnswersGrid();
-    // Check if everyone who needed to answer has done so
     checkAllAnswered();
   }
   checkStartBtn();
@@ -328,13 +327,11 @@ async function onGameEvent(ev){
   }
 
   if(ev.event_type === 'dice_rolled'){
-    // Deduplicate: ignore if we already processed this exact roll
     const rollKey = String(ev.id || (ev.payload.player_id+'_'+ev.payload.roll+'_'+(ev.inserted_at||ev.created_at||Date.now())));
     if(lastProcessedRollKey === rollKey) return;
 
     await refreshPlayers();
     const currentPlayer = players[currentTurnIdx];
-    // Validate it's really the current player rolling
     if(!currentPlayer || currentPlayer.id !== ev.payload.player_id) return;
 
     lastProcessedRollKey = rollKey;
@@ -343,20 +340,18 @@ async function onGameEvent(ev){
 
   if(ev.event_type === 'penalty_chosen'){
     const { player_id, choice } = ev.payload;
-    await refreshPlayers();
-
-    // Apply the penalty using the LIVE star count from DB
+    
     if(choice === 'star'){
-      const p = players.find(x => x.id === player_id);
-      if(p){
-        await sb.from('players').update({stars: Math.max(0, p.stars - 1)}).eq('id', player_id);
+      // Corrección: Leer cuenta de estrellas fresca para no basarse en caché local
+      const { data: freshPlayer } = await sb.from('players').select('stars').eq('id', player_id).single();
+      if(freshPlayer){
+        await sb.from('players').update({stars: Math.max(0, freshPlayer.stars - 1)}).eq('id', player_id);
       }
     } else {
       skippedTurns.add(player_id);
       await sb.from('game_sessions').update({skipped_turns:[...skippedTurns]}).eq('id', sessionId);
     }
 
-    // Remove player from pending_penalties in DB
     const { data: sess } = await sb.from('game_sessions')
       .select('current_question').eq('id', sessionId).single();
     if(sess?.current_question){
@@ -365,7 +360,6 @@ async function onGameEvent(ev){
       await sb.from('game_sessions').update({current_question: cq}).eq('id', sessionId);
 
       if(cq.pending_penalties.length === 0){
-        // All penalties done — show the next-turn button
         document.getElementById('q-next').className = 'q-next show';
         const msg = document.getElementById('penalty-wait-msg');
         if(msg) msg.innerHTML = '✅ Todos eligieron su castigo.';
@@ -531,7 +525,6 @@ async function processMove(playerId, steps){
   let newPos=Math.min(p.position+steps, WIN_CELL);
   const landedType=CELL_TYPES[newPos];
 
-  // BAD tile: move back 3 immediately on landing
   let tileTypeForQuestion=landedType;
   if(landedType==='bad'){
     newPos=Math.max(0, newPos-3);
@@ -558,12 +551,10 @@ async function triggerQuestion(tileType, playerId, playerName){
   revealDone=false;
   revealLock=false;
 
-  // Reset all answered flags FIRST so the grid shows fresh state
   await sb.from('players')
     .update({answered:false, last_answer:null, last_correct:null})
     .eq('session_id', sessionId);
 
-  // Fetch a question
   let q=null;
   if(usedQIds.length){
     const {data}=await sb.from('question_bank').select('*').not('id','in',`(${usedQIds.join(',')})`).limit(100);
@@ -586,7 +577,6 @@ async function triggerQuestion(tileType, playerId, playerName){
   };
   currentQuestion=qPayload;
 
-  // Publish to DB — this triggers player devices to show the question
   await sb.from('game_sessions').update({status:'question', current_question:qPayload}).eq('id',sessionId);
 
   await refreshPlayers();
@@ -621,7 +611,7 @@ function showQuestionOverlay(q){
   document.getElementById('q-overlay').classList.add('open');
 }
 
-/* ─── ANSWERS GRID (live, shows as soon as answers arrive) ─── */
+/* ─── ANSWERS GRID ─── */
 function renderAnswersGrid(){
   const grid=document.getElementById('answers-grid');
   const q=currentQuestion;
@@ -648,9 +638,7 @@ function renderAnswersGrid(){
       <div class="ac-choice" style="color:var(--muted)">…</div>
     </div>`;
 
-    // Player has answered — show their letter immediately (even before reveal)
     const letter=p.last_answer!=null?String.fromCharCode(65+p.last_answer):'?';
-    // After reveal: colour correct/wrong. Before reveal: yellow "answered"
     const cls=revealDone?(p.last_correct?'correct':'wrong'):'answered';
     return `<div class="ans-card ${cls}">
       <div class="ac-av">${p.avatar}</div>
@@ -666,6 +654,7 @@ function checkAllAnswered(){
   const q=currentQuestion;
   if(!q) return;
   const isChallenge=q.tile_type==='challenge';
+  // Gracias a onSessionUpdate, currentQuestion está sincronizado por ende el tile_type es correcto.
   const required=isChallenge?players:players.filter(p=>p.id===q.active_player);
   if(required.length>0 && required.every(p=>p.answered)){
     clearInterval(timerInterval);
@@ -690,17 +679,15 @@ function startTimer(){
 /* ─── REVEAL ANSWER & APPLY REWARDS/PENALTIES ─── */
 async function revealAnswer(){
   if(revealDone||revealLock) return;
-  revealLock=true;   // block any re-entrant call
+  revealLock=true;
   revealDone=true;
   clearInterval(timerInterval);
 
-  // Always get the FRESHEST player data right before computing rewards
   await refreshPlayers();
 
   const q=currentQuestion;
   const opts=Array.isArray(q.options)?q.options:JSON.parse(q.options);
 
-  // Highlight correct option on teacher screen
   opts.forEach((_,i)=>{
     const el=document.getElementById(`qh-${i}`);
     if(el) el.classList.toggle('correct', i===q.correct_index);
@@ -709,41 +696,40 @@ async function revealAnswer(){
   let pendingPenalties=[];
 
   for(const p of players){
+    // Consulta atómica del estado del jugador para evitar asignar estrellas sobre data vieja
+    const { data: freshPlayer } = await sb.from('players').select('stars, position').eq('id', p.id).single();
+    if(!freshPlayer) continue;
+
     if(q.tile_type==='challenge'){
       if(p.answered && p.last_correct===true){
-        // FIX: use p.stars from the freshly fetched array
-        await sb.from('players').update({stars: p.stars+1}).eq('id',p.id);
+        await sb.from('players').update({stars: freshPlayer.stars+1}).eq('id',p.id);
         showToast(`⭐ ${p.name} +1 estrella!`);
       } else {
-        // Wrong answer OR timed-out on challenge → penalty choice
         pendingPenalties.push(p.id);
       }
     } else if(p.id===q.active_player){
       if(p.last_correct===true){
         if(q.tile_type==='star'){
-          await sb.from('players').update({stars: p.stars+1}).eq('id',p.id);
+          await sb.from('players').update({stars: freshPlayer.stars+1}).eq('id',p.id);
           showToast(`⭐ ${p.name} gana +1 estrella bonus!`);
         } else if(q.tile_type==='normal'){
-          await sb.from('players').update({position: Math.min(WIN_CELL, p.position+1)}).eq('id',p.id);
+          await sb.from('players').update({position: Math.min(WIN_CELL, freshPlayer.position+1)}).eq('id',p.id);
           showToast(`✅ ${p.name} avanza 1 casilla extra!`);
         }
-        // bad tile + correct answer = no extra penalty (already moved back 3)
       } else {
         if(q.tile_type==='bad'){
-          await sb.from('players').update({position: Math.max(0, p.position-2)}).eq('id',p.id);
+          await sb.from('players').update({position: Math.max(0, freshPlayer.position-2)}).eq('id',p.id);
           showToast(`💀 ${p.name} falla y retrocede 2 más!`);
         }
       }
     }
   }
 
-  // Refresh again to get updated stars/positions into scoreboard
   await refreshPlayers();
   renderScoreboard();
   renderPlayerTokens();
-  renderAnswersGrid(); // now shows correct/wrong colours
+  renderAnswersGrid();
 
-  // Build feedback line
   const fb=document.getElementById('q-feedback');
   fb.innerHTML=`✅ <strong>${String.fromCharCode(65+q.correct_index)}) ${opts[q.correct_index]}</strong><br><span style="opacity:0.8">${q.explanation||''}</span>`;
 
@@ -751,10 +737,9 @@ async function revealAnswer(){
     fb.innerHTML+=`<div id="penalty-wait-msg" style="margin-top:14px;color:var(--p7);font-weight:bold;">
       ⚠️ Esperando que ${pendingPenalties.length} jugador/es elijan su penalización…
     </div>`;
-    document.getElementById('q-next').className='q-next'; // hide until done
+    document.getElementById('q-next').className='q-next';
     const updatedQ={...q, options:opts, pending_penalties:pendingPenalties};
     currentQuestion=updatedQ;
-    // status=penalty so player devices know to show penalty screen
     await sb.from('game_sessions').update({status:'penalty', current_question:updatedQ}).eq('id',sessionId);
   } else {
     document.getElementById('q-next').className='q-next show';
@@ -772,7 +757,6 @@ async function closeQuestion(){
 
 /* ─── ADVANCE TURN ─── */
 async function advanceTurn(){
-  // Re-read skipped turns from DB
   const {data:sess}=await sb.from('game_sessions').select('skipped_turns,current_turn').eq('id',sessionId).single();
   if(sess){
     skippedTurns=new Set(sess.skipped_turns||[]);
