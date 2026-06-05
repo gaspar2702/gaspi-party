@@ -60,7 +60,7 @@ body{
 .turn-card-name{font-family:'Fredoka One',cursive;font-size:20px}
 .roll-btn{background:linear-gradient(135deg,var(--p4),var(--p2));color:#0d0d1a;font-family:'Fredoka One',cursive;font-size:24px;padding:22px;border-radius:20px;border:none;width:100%;box-shadow:0 8px 24px rgba(0,210,160,0.4);cursor:pointer;animation:pulse 1.5s infinite;margin-top:10px;}
 @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
-.roll-btn:disabled{animation:none;opacity:0.8;}
+.roll-btn:disabled{animation:none;opacity:0.8;cursor:not-allowed;}
 
 /* ── QUESTION ── */
 #question{padding:20px 16px;gap:14px;align-items:stretch;background:var(--surface);text-align:left;}
@@ -83,6 +83,7 @@ body{
 
 /* ── PENALTY ── */
 .penalty-btn{background:var(--surface);border:2px solid var(--p1);color:var(--text);font-family:'Fredoka One',cursive;font-size:16px;padding:18px;border-radius:16px;width:100%;margin-top:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;}
+.penalty-btn:disabled{opacity:0.4;cursor:not-allowed;}
 .penalty-title{font-family:'Fredoka One',cursive;font-size:28px;color:var(--p7);margin-bottom:10px;}
 
 /* ── END ── */
@@ -165,13 +166,13 @@ body{
 <!-- PENALTY -->
 <div class="screen" id="penalty">
   <div class="penalty-title">⚠️ ¡Reto Fallado!</div>
-  
+
   <div id="penalty-me" style="display:none; width:100%; max-width:340px;">
     <div style="color:var(--muted); margin-bottom:16px;">Elige tu castigo por fallar el desafío:</div>
-    <button class="penalty-btn" onclick="submitPenalty('star')">⭐ Perder 1 Estrella</button>
-    <button class="penalty-btn" onclick="submitPenalty('turn')">⏭️ Perder el próximo turno</button>
+    <button class="penalty-btn" id="penalty-star-btn" onclick="submitPenalty('star')">⭐ Perder 1 Estrella</button>
+    <button class="penalty-btn" id="penalty-turn-btn" onclick="submitPenalty('turn')">⏭️ Perder el próximo turno</button>
   </div>
-  
+
   <div id="penalty-other" style="display:none;">
     <div class="wait-av" style="font-size:50px">👀</div>
     <div style="color:var(--muted); margin-top:20px;">Esperando que otros jugadores elijan su castigo...</div>
@@ -208,6 +209,10 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 let sb=null, sessionId=null, myPlayerId=null, myPlayer=null, allPlayers=[];
 let currentSession=null, timerInterval=null, timerSec=30, myAvatar='🎮';
 let hasAnswered=false, qCurrent=null;
+let isRolling=false; // guard against double-roll
+let penaltySubmitted=false; // guard against double-penalty
+let lastSessionStatus=''; // track transitions in fallback poller
+let lastQuestionId=null; // track which question is currently shown
 
 const AVATARS = ['🕵️','🐱','🤖','🦸','🧙','👾','🦊','🐧','🦄','🐲','🐼','🦋','🎩','🚀','🦁'];
 const TYPE_COLORS={general:'#ff4757',tipo:'#45d0f5',url:'#ffd32a',defensa:'#00d2a0',tecnico:'#b8a4ff'};
@@ -231,13 +236,14 @@ window.addEventListener('DOMContentLoaded',()=>{
     grid.appendChild(btn);
   });
   myAvatar = AVATARS[0];
-  initPlayer();
-});
 
-async function initPlayer(){
+  document.getElementById('room-code-input').addEventListener('input', e =>
+    e.target.value = e.target.value.toUpperCase()
+  );
+
   try{ sb = createClient(SUPABASE_URL, SUPABASE_KEY); show('join'); }
   catch(e){ showToast('Error: '+e.message); }
-}
+});
 
 async function joinGame(){
   const code = document.getElementById('room-code-input').value.trim().toUpperCase();
@@ -245,26 +251,35 @@ async function joinGame(){
   if(code.length!==4){ showToast('Código de 4 letras'); return; }
   if(!name){ showToast('Escribe tu nombre'); return; }
 
-  document.getElementById('join-btn').disabled=true;
+  const btn = document.getElementById('join-btn');
+  btn.disabled=true;
   try{
-    const {data:sessions}=await sb.from('game_sessions').select('*').eq('room_code',code).neq('status','ended').limit(1);
-    if(!sessions?.length){ showToast('Sala no encontrada'); document.getElementById('join-btn').disabled=false; return; }
-    sessionId = sessions[0].id;
+    const {data:sessions, error:sessErr}=await sb.from('game_sessions').select('*').eq('room_code',code).neq('status','ended').limit(1);
+    if(sessErr) throw sessErr;
+    if(!sessions?.length){ showToast('Sala no encontrada'); btn.disabled=false; return; }
+    const sess = sessions[0];
+    if(sess.status !== 'lobby'){ showToast('La partida ya comenzó'); btn.disabled=false; return; }
+    sessionId = sess.id;
 
     const {data:existing}=await sb.from('players').select('id,color').eq('session_id',sessionId).eq('is_active',true);
-    if(existing?.length>=6){ showToast('¡Sala llena!'); document.getElementById('join-btn').disabled=false; return; }
+    if(existing?.length>=6){ showToast('¡Sala llena!'); btn.disabled=false; return; }
 
     const COLORS=['#ff4757','#45d0f5','#ffd32a','#00d2a0','#b8a4ff','#ff6fa3'];
     const usedColors=existing?.map(p=>p.color)||[];
-    const myColor=COLORS.find(c=>!usedColors.includes(c))||COLORS[existing?.length%6];
+    const myColor=COLORS.find(c=>!usedColors.includes(c))||COLORS[(existing?.length||0)%6];
 
-    const {data:player}=await sb.from('players').insert({
+    const {data:player, error:playerErr}=await sb.from('players').insert({
       session_id:sessionId, name, avatar:myAvatar, color:myColor,
-      turn_order:(existing?.length||0), position:0, stars:0
+      turn_order:(existing?.length||0), position:0, stars:0,
+      answered:false, last_answer:null, last_correct:null
     }).select().single();
-    
+    if(playerErr) throw playerErr;
+
     myPlayerId=player.id; myPlayer=player;
-    await sb.from('game_events').insert({session_id:sessionId,player_id:myPlayerId,event_type:'player_joined',payload:{name,avatar:myAvatar}});
+    await sb.from('game_events').insert({
+      session_id:sessionId, player_id:myPlayerId,
+      event_type:'player_joined', payload:{name,avatar:myAvatar}
+    });
 
     document.getElementById('wait-av').textContent=myAvatar;
     document.getElementById('wait-name').textContent=`¡Hola, ${name}!`;
@@ -272,49 +287,112 @@ async function joinGame(){
     subscribePlayer();
     await refreshAll();
     renderWaiting();
-  }catch(e){ showToast('Error: '+e.message); document.getElementById('join-btn').disabled=false; }
+  }catch(e){
+    showToast('Error: '+e.message);
+    btn.disabled=false;
+  }
 }
 
 function subscribePlayer(){
-  sb.channel('player:'+sessionId)
-    .on('postgres_changes',{event:'*',schema:'public',table:'game_sessions',filter:`id=eq.${sessionId}`},
+  const ch = sb.channel('player:'+sessionId)
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'game_sessions',filter:`id=eq.${sessionId}`},
       payload=>onSessionChange(payload.new))
-    .on('postgres_changes',{event:'*',schema:'public',table:'players',filter:`session_id=eq.${sessionId}`},
+    .on('postgres_changes',{event:'UPDATE',schema:'public',table:'players',filter:`session_id=eq.${sessionId}`},
       async ()=>{ await refreshAll(); renderCurrentView(); })
-    .subscribe();
+    .subscribe((status)=>{
+      if(status === 'CHANNEL_ERROR' || status === 'TIMED_OUT'){
+        showToast('⚠️ Reconectando…');
+        setTimeout(()=>{ ch.unsubscribe(); subscribePlayer(); }, 3000);
+      }
+    });
 }
 
 async function onSessionChange(sess){
-  currentSession=sess;
+  if(!sess) return;
+  currentSession = sess;
+
+  const prevStatus = lastSessionStatus;
+  lastSessionStatus = sess.status;
+
+  // Sync local player data
   await refreshAll();
-  if(sess.status==='lobby'){ renderWaiting(); show('waiting'); return; }
-  if(sess.status==='ended'){ showEndScreen(); return; }
-  if(sess.status==='question'){ renderQuestionScreen(sess.current_question); show('question'); return; }
-  if(sess.status==='penalty'){ renderPenaltyScreen(sess.current_question); show('penalty'); return; }
-  renderSpectate(sess); show('spectate');
+
+  if(sess.status === 'lobby'){
+    renderWaiting(); show('waiting'); return;
+  }
+  if(sess.status === 'ended'){
+    clearInterval(timerInterval);
+    showEndScreen(); return;
+  }
+  if(sess.status === 'question'){
+    const q = sess.current_question;
+    if(!q) return;
+    // Only re-render question if it's a new question (different ID)
+    const qId = q.id + '_' + q.tile_type + '_' + (q.active_player || '');
+    if(qId !== lastQuestionId){
+      lastQuestionId = qId;
+      hasAnswered = false;
+      clearInterval(timerInterval);
+      renderQuestionScreen(q);
+      show('question');
+    } else {
+      // Same question — just refresh the answer tally display
+      renderAnswerTally();
+    }
+    return;
+  }
+  if(sess.status === 'penalty'){
+    const q = sess.current_question;
+    clearInterval(timerInterval);
+    // If coming from question screen, make sure penalty screen is correct
+    if(prevStatus === 'question' || prevStatus === 'penalty'){
+      penaltySubmitted = false;
+      renderPenaltyScreen(q);
+      show('penalty');
+    }
+    return;
+  }
+  // status === 'active'
+  if(prevStatus === 'question' || prevStatus === 'penalty'){
+    // Question/penalty cycle ended — reset and go back to spectate
+    hasAnswered = false;
+    penaltySubmitted = false;
+    clearInterval(timerInterval);
+  }
+  renderSpectate(sess);
+  show('spectate');
 }
 
 async function refreshAll(){
-  const [{data:sess},{data:players}]=await Promise.all([
-    sb.from('game_sessions').select('*').eq('id',sessionId).single(),
-    sb.from('players').select('*').eq('session_id',sessionId).eq('is_active',true).order('turn_order')
-  ]);
-  currentSession=sess; allPlayers=players||[];
-  myPlayer=allPlayers.find(p=>p.id===myPlayerId)||myPlayer;
+  try{
+    const [{data:sess},{data:players}]=await Promise.all([
+      sb.from('game_sessions').select('*').eq('id',sessionId).single(),
+      sb.from('players').select('*').eq('session_id',sessionId).eq('is_active',true).order('turn_order')
+    ]);
+    if(sess) currentSession=sess;
+    allPlayers=players||[];
+    myPlayer=allPlayers.find(p=>p.id===myPlayerId)||myPlayer;
+  }catch(e){ /* network error, ignore */ }
 }
 
 function renderCurrentView(){
   if(!currentSession) return;
-  if(currentSession.status==='lobby') renderWaiting();
-  else if(currentSession.status==='ended') showEndScreen();
-  else if(currentSession.status==='question') renderAnswerTally();
-  else if(currentSession.status==='penalty') renderPenaltyScreen(currentSession.current_question);
+  const s = currentSession.status;
+  if(s === 'lobby') renderWaiting();
+  else if(s === 'ended') showEndScreen();
+  else if(s === 'question'){
+    // Only update tally; don't re-render the whole question (would lose answer state)
+    renderAnswerTally();
+  }
+  else if(s === 'penalty'){
+    renderPenaltyScreen(currentSession.current_question);
+  }
   else renderSpectate(currentSession);
 }
 
 function renderWaiting(){
   document.getElementById('players-mini').innerHTML=allPlayers.map(p=>`
-    <div class="pm-chip ${p.id===myPlayerId?'me':''}" style="border-color:${p.color}">
+    <div class="pm-chip" style="border-color:${p.color}">
       ${p.avatar} <span style="color:${p.color}">${p.name}</span>
     </div>`).join('');
 }
@@ -331,60 +409,84 @@ function renderSpectate(sess){
   if(active){
     document.getElementById('sp-turn').textContent=`${active.avatar} ${active.name}`;
     document.getElementById('sp-turn').style.color=active.color;
-    
-    if(active.id === myPlayerId) {
-        document.getElementById('sp-roll-area').style.display = 'block';
-        document.getElementById('sp-roll-btn').disabled = false;
-        document.getElementById('sp-roll-btn').textContent = '🎲 LANZAR DADO';
+
+    if(active.id === myPlayerId){
+      document.getElementById('sp-roll-area').style.display='block';
+      // Only re-enable if not currently rolling
+      if(!isRolling){
+        document.getElementById('sp-roll-btn').disabled=false;
+        document.getElementById('sp-roll-btn').textContent='🎲 LANZAR DADO';
+      }
     } else {
-        document.getElementById('sp-roll-area').style.display = 'none';
+      document.getElementById('sp-roll-area').style.display='none';
     }
   }
 }
 
 async function rollDice(){
-    document.getElementById('sp-roll-btn').disabled = true;
-    document.getElementById('sp-roll-btn').textContent = '🎲 Lanzando...';
+  if(isRolling) return; // guard double-tap
+  isRolling = true;
+  const btn = document.getElementById('sp-roll-btn');
+  btn.disabled = true;
+  btn.textContent = '🎲 Lanzando...';
+  try{
     const roll = Math.floor(Math.random()*6)+1;
-    await sb.from('game_events').insert({ session_id: sessionId, event_type: 'dice_rolled', payload: { roll, player_id: myPlayerId } });
-    setTimeout(()=>{ document.getElementById('sp-roll-btn').textContent = `¡Sacaste un ${roll}!`; }, 500);
+    await sb.from('game_events').insert({
+      session_id: sessionId,
+      event_type: 'dice_rolled',
+      payload: { roll, player_id: myPlayerId }
+    });
+    btn.textContent = `¡Sacaste un ${roll}! 🎲`;
+  }catch(e){
+    showToast('Error al lanzar el dado, intenta de nuevo');
+    btn.disabled=false;
+    btn.textContent='🎲 LANZAR DADO';
+    isRolling=false;
+  }
+  // isRolling stays true — will be reset when spectate view is re-rendered on next turn
 }
 
 function renderQuestionScreen(q){
-  if(!q || hasAnswered) return;
+  if(!q) return;
   qCurrent=q;
   const isChallenge = q.tile_type === 'challenge';
   const amIActive = q.active_player === myPlayerId;
   const opts=typeof q.options==='string'?JSON.parse(q.options):q.options;
-  
+
   const badge=document.getElementById('qsm-badge');
-  if(isChallenge) {
-      badge.textContent='⚔️ Desafío Todos'; badge.style.background='#ff9f43';
+  if(isChallenge){
+    badge.textContent='⚔️ Desafío Todos'; badge.style.background='#ff9f43';
+  } else if(q.tile_type === 'bad'){
+    badge.textContent='💀 Peligro'; badge.style.background='#ff4757';
   } else {
-      badge.textContent=TYPE_NAMES[q.category]||'Pregunta'; badge.style.background=TYPE_COLORS[q.category]||'#888';
+    badge.textContent=TYPE_NAMES[q.category]||'Pregunta'; badge.style.background=TYPE_COLORS[q.category]||'#888';
   }
 
-  document.getElementById('qsm-text').textContent=`${q.emoji} ${q.question}`;
-  const optsEl=document.getElementById('qsm-opts');
-  
-  if (!isChallenge && !amIActive) {
-      optsEl.innerHTML = `<div class="wait-answer-msg show" style="margin-top:20px;">👀 Observando el turno de ${q.active_player_name}...</div>`;
-      document.getElementById('qsm-wait').classList.remove('show');
-  } else {
-      optsEl.innerHTML=opts.map((opt,i)=>`
-        <button class="q-opt-btn" id="popt-${i}" onclick="answerQuestion(${i})">
-          <span class="letter">${String.fromCharCode(65+i)}</span>
-          <span>${opt}</span>
-        </button>`).join('');
-      document.getElementById('qsm-wait').classList.remove('show');
-  }
-
+  document.getElementById('qsm-text').textContent=`${q.emoji||''} ${q.question}`;
   document.getElementById('qsm-feedback').classList.remove('show');
+  document.getElementById('qsm-wait').classList.remove('show');
+
+  const optsEl=document.getElementById('qsm-opts');
+  if(!isChallenge && !amIActive){
+    optsEl.innerHTML=`<div class="wait-answer-msg show" style="margin-top:20px;">👀 Observando el turno de <strong>${q.active_player_name||'otro jugador'}</strong>...</div>`;
+  } else {
+    optsEl.innerHTML=opts.map((opt,i)=>`
+      <button class="q-opt-btn" id="popt-${i}" onclick="answerQuestion(${i})">
+        <span class="letter">${String.fromCharCode(65+i)}</span>
+        <span>${opt}</span>
+      </button>`).join('');
+  }
+
+  clearInterval(timerInterval);
   startPlayerTimer();
 }
 
 function renderAnswerTally(){
-  if(myPlayer?.answered) document.getElementById('qsm-wait').classList.add('show');
+  // Called when players table updates during an active question
+  // If I've already answered, just show wait message
+  if(hasAnswered && document.getElementById('question').classList.contains('on')){
+    document.getElementById('qsm-wait').classList.add('show');
+  }
 }
 
 function startPlayerTimer(){
@@ -394,71 +496,132 @@ function startPlayerTimer(){
   timerInterval=setInterval(()=>{
     timerSec--;
     document.getElementById('qsm-bar').style.width=(timerSec/30*100)+'%';
-    document.getElementById('qsm-timer').textContent=timerSec;
-    if(timerSec<=0){ clearInterval(timerInterval); if(!hasAnswered && (qCurrent.tile_type === 'challenge' || qCurrent.active_player === myPlayerId)) showQuestionFeedback(null,false); }
+    document.getElementById('qsm-timer').textContent=Math.max(0,timerSec);
+    if(timerSec<=0){
+      clearInterval(timerInterval);
+      // Auto-submit if player didn't answer and it's their turn
+      if(!hasAnswered && qCurrent){
+        const amIActive = qCurrent.tile_type==='challenge' || qCurrent.active_player===myPlayerId;
+        if(amIActive) handleTimeOut();
+      }
+    }
   },1000);
+}
+
+async function handleTimeOut(){
+  if(hasAnswered) return;
+  hasAnswered = true;
+  // Mark as answered with null (timed out) so host knows
+  try{
+    await sb.from('players').update({ answered:true, last_answer:null, last_correct:false }).eq('id',myPlayerId);
+  }catch(e){ /* ignore */ }
+  document.getElementById('qsm-wait').classList.add('show');
+  document.getElementById('qsm-wait').textContent='⏱️ Tiempo agotado — esperando resultado…';
 }
 
 async function answerQuestion(idx){
   if(hasAnswered) return;
-  hasAnswered=true; clearInterval(timerInterval);
+  hasAnswered=true;
+  clearInterval(timerInterval);
+
+  // Disable all buttons immediately
   document.querySelectorAll('.q-opt-btn').forEach(b=>b.disabled=true);
   document.getElementById(`popt-${idx}`)?.classList.add('selected');
 
   const q=qCurrent;
   const correct=idx===q.correct_index;
 
-  await sb.from('players').update({ answered:true, last_answer:idx, last_correct:correct }).eq('id',myPlayerId);
-  await sb.from('game_events').insert({ session_id:sessionId, player_id:myPlayerId, event_type:'player_answered', payload:{answer_idx:idx,correct,question_id:q.id} });
+  try{
+    await sb.from('players').update({ answered:true, last_answer:idx, last_correct:correct }).eq('id',myPlayerId);
+    await sb.from('game_events').insert({
+      session_id:sessionId, player_id:myPlayerId,
+      event_type:'player_answered',
+      payload:{answer_idx:idx, correct, question_id:q.id}
+    });
+  }catch(e){ showToast('Error al enviar respuesta'); }
 
   showQuestionFeedback(idx,correct,q);
 }
 
 function showQuestionFeedback(idx,correct,q){
-  if(idx!==null){
-    const opts=typeof q?.options==='string'?JSON.parse(q.options):q?.options;
+  const opts=typeof q?.options==='string'?JSON.parse(q.options):q?.options;
+  if(opts && idx !== null){
     document.querySelectorAll('.q-opt-btn').forEach((b,i)=>{
-      if(i===q?.correct_index) b.classList.add('correct');
-      else if(i===idx&&!correct) b.classList.add('wrong');
+      if(i===q.correct_index) b.classList.add('correct');
+      else if(i===idx && !correct) b.classList.add('wrong');
     });
     const fb=document.getElementById('qsm-feedback');
-    fb.innerHTML=correct ? `✅ <strong>¡Correcto!</strong><br>${q.explanation}` : `❌ <strong>Incorrecto.</strong><br>${q.explanation}`;
+    fb.innerHTML=correct
+      ? `✅ <strong>¡Correcto!</strong><br>${q.explanation}`
+      : `❌ <strong>Incorrecto.</strong> La correcta era ${String.fromCharCode(65+q.correct_index)}.<br>${q.explanation}`;
     fb.style.borderColor=correct?'var(--p4)':'var(--p1)';
     fb.classList.add('show');
   }
-  document.getElementById('qsm-wait').classList.add('show');
-  document.getElementById('qsm-wait').textContent='✅ Respuesta enviada — mira la pantalla principal';
+  const waitEl = document.getElementById('qsm-wait');
+  waitEl.classList.add('show');
+  waitEl.textContent='✅ Respuesta enviada — mira la pantalla principal';
 }
 
 function renderPenaltyScreen(q){
-   if(q.pending_penalties.includes(myPlayerId)){
-       document.getElementById('penalty-me').style.display = 'block';
-       document.getElementById('penalty-other').style.display = 'none';
-   } else {
-       document.getElementById('penalty-me').style.display = 'none';
-       document.getElementById('penalty-other').style.display = 'block';
-   }
+  if(!q) return;
+  const pendingPenalties = Array.isArray(q.pending_penalties) ? q.pending_penalties : [];
+  const iAmPenalized = pendingPenalties.includes(myPlayerId);
+
+  document.getElementById('penalty-me').style.display = iAmPenalized ? 'block' : 'none';
+  document.getElementById('penalty-other').style.display = iAmPenalized ? 'none' : 'block';
+
+  // Reset penalty buttons if I am penalized and haven't submitted yet
+  if(iAmPenalized && !penaltySubmitted){
+    const starBtn = document.getElementById('penalty-star-btn');
+    const turnBtn = document.getElementById('penalty-turn-btn');
+    if(starBtn){ starBtn.disabled=false; starBtn.innerHTML='⭐ Perder 1 Estrella'; }
+    if(turnBtn){ turnBtn.disabled=false; turnBtn.innerHTML='⏭️ Perder el próximo turno'; }
+  }
 }
 
 async function submitPenalty(choice){
-   document.getElementById('penalty-me').innerHTML = '<div style="color:var(--p4); font-size:20px; font-weight:bold;">✅ Elección enviada.</div><div style="color:var(--muted); margin-top:10px;">Mira la pantalla principal.</div>';
-   await sb.from('game_events').insert({ session_id: sessionId, player_id: myPlayerId, event_type: 'penalty_chosen', payload: { choice } });
+  if(penaltySubmitted) return;
+  penaltySubmitted = true;
+
+  const starBtn = document.getElementById('penalty-star-btn');
+  const turnBtn = document.getElementById('penalty-turn-btn');
+  if(starBtn) starBtn.disabled=true;
+  if(turnBtn) turnBtn.disabled=true;
+
+  try{
+    await sb.from('game_events').insert({
+      session_id: sessionId,
+      player_id: myPlayerId,
+      event_type: 'penalty_chosen',
+      payload: { choice, player_id: myPlayerId }
+    });
+    document.getElementById('penalty-me').innerHTML =
+      '<div style="color:var(--p4); font-size:20px; font-weight:bold;">✅ Elección enviada.</div>' +
+      '<div style="color:var(--muted); margin-top:10px;">Mira la pantalla principal.</div>';
+  }catch(e){
+    showToast('Error al enviar elección, intenta de nuevo');
+    penaltySubmitted=false;
+    if(starBtn) starBtn.disabled=false;
+    if(turnBtn) turnBtn.disabled=false;
+  }
 }
 
-let lastStatus='';
+/* ─── FALLBACK POLLER ─── */
+// Backs up realtime in case a websocket event is missed
+// Checks every 3 seconds for status changes
 setInterval(async()=>{
-  if(!sessionId) return;
-  const {data:s}=await sb.from('game_sessions').select('status').eq('id',sessionId).single();
-  if(!s) return;
-  if(lastStatus==='question' && s.status==='active'){
-    hasAnswered=false; clearInterval(timerInterval);
-    await refreshAll(); renderSpectate(currentSession); show('spectate');
-  }
-  if(lastStatus==='penalty' && s.status==='active'){
-    await refreshAll(); renderSpectate(currentSession); show('spectate');
-  }
-  lastStatus=s.status;
-},2000);
+  if(!sessionId || !sb) return;
+  try{
+    const {data:s}=await sb.from('game_sessions').select('status,current_question,current_turn').eq('id',sessionId).single();
+    if(!s) return;
+
+    // Only act if status changed (avoid re-rendering unnecessarily)
+    if(s.status === lastSessionStatus) return;
+
+    // Detected a missed realtime event — handle it
+    await onSessionChange(s);
+  }catch(e){ /* network error, ignore */ }
+}, 3000);
 
 async function showEndScreen(){
   await refreshAll();
@@ -471,15 +634,24 @@ async function showEndScreen(){
   document.getElementById('end-av').textContent=p?.avatar||'🎮';
   document.getElementById('end-pname').textContent=p?.name||'—';
   document.getElementById('end-pname').style.color=p?.color||'#fff';
-  document.getElementById('end-stars').textContent=p?.stars||0;
+  document.getElementById('end-stars').textContent=p?.stars??0;
   document.getElementById('end-rank').textContent=`#${rank}`;
   show('end');
 }
 
-function show(id){ document.querySelectorAll('.screen').forEach(s=>s.classList.remove('on')); document.getElementById(id).classList.add('on'); }
+function show(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('on'));
+  document.getElementById(id).classList.add('on');
+  // Reset isRolling when navigating away from spectate (new turn)
+  if(id !== 'spectate') isRolling=false;
+}
+
 let toastT=null;
-function showToast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2500); }
-document.addEventListener('DOMContentLoaded',()=>document.getElementById('room-code-input')?.addEventListener('input',e=>e.target.value=e.target.value.toUpperCase()));
+function showToast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.classList.add('show');
+  clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2500);
+}
 </script>
 </body>
 </html>
