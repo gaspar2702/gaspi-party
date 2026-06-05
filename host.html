@@ -340,7 +340,6 @@ async function onGameEvent(ev){
   if(ev.event_type === 'penalty_chosen'){
     const { player_id, choice } = ev.payload;
     
-    // ATÓMICO: Juntamos las actualizaciones de game_sessions para evitar condiciones de carrera en los celulares.
     let sessionUpdates = {};
 
     if(choice === 'star'){
@@ -365,6 +364,8 @@ async function onGameEvent(ev){
         document.getElementById('q-next').className = 'q-next show';
         const msg = document.getElementById('penalty-wait-msg');
         if(msg) msg.innerHTML = '✅ Todos eligieron su castigo.';
+        const btn = document.getElementById('force-skip-penalty');
+        if(btn) btn.remove();
         sessionUpdates.status = 'penalty_done';
       }
     }
@@ -751,7 +752,9 @@ async function revealAnswer(){
   if(pendingPenalties.length>0){
     fb.innerHTML+=`<div id="penalty-wait-msg" style="margin-top:14px;color:var(--p7);font-weight:bold;">
       ⚠️ Esperando que ${pendingPenalties.length} jugador/es elijan su penalización…
-    </div>`;
+    </div>
+    <button id="force-skip-penalty" style="margin-top:10px; background:var(--p1); color:white; border:none; padding:8px 16px; border-radius:10px; cursor:pointer;" onclick="forceSkipPenalties()">Saltar espera (Forzar)</button>`;
+    
     document.getElementById('q-next').className='q-next';
     const updatedQ={...q, options:opts, pending_penalties:pendingPenalties};
     currentQuestion=updatedQ;
@@ -763,10 +766,18 @@ async function revealAnswer(){
   fb.className='q-feedback show';
 }
 
+window.forceSkipPenalties = async function() {
+  document.getElementById('q-next').className='q-next show';
+  const msg = document.getElementById('penalty-wait-msg');
+  if(msg) msg.innerHTML = '✅ Penalizaciones forzadas/saltadas.';
+  const btn = document.getElementById('force-skip-penalty');
+  if(btn) btn.remove();
+  await sb.from('game_sessions').update({status:'penalty_done', current_question: {...currentQuestion, pending_penalties:[]}}).eq('id', sessionId);
+};
+
 async function closeQuestion(){
   document.getElementById('q-overlay').classList.remove('open');
   clearInterval(timerInterval);
-  // Al pasar estos parámetros, la actualización se vuelve atómica en la DB
   await advanceTurn('active', true);
 }
 
@@ -798,7 +809,6 @@ async function advanceTurn(newStatus = null, clearQuestion = false){
     } else { break; }
   }while(true);
 
-  // ACTUALIZACIÓN ATÓMICA: Evita que los celulares reciban el status 'active' antes que el cambio de turno.
   const updates = { current_turn: currentTurnIdx };
   if(newStatus) updates.status = newStatus;
   if(clearQuestion) updates.current_question = null;
