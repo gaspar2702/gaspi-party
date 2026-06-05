@@ -93,7 +93,7 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
 
 .q-header{display:flex;align-items:center;gap:14px;margin-bottom:16px}
 .q-badge{font-family:'Fredoka One',cursive;font-size:13px;padding:6px 16px;
-  border-radius:50px;white-space:nowrap;color:#0d0d1a}
+  border-radius:50px;white-space:nowrap;color:#0d0d1a;font-weight:bold}
 .q-timer-wrap{flex:1;height:10px;background:var(--border);border-radius:99px;overflow:hidden}
 .q-timer-bar{height:100%;border-radius:99px;
   background:linear-gradient(90deg,var(--p4),var(--p3),var(--p1));transition:width 1s linear}
@@ -106,18 +106,10 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
 .q-opt .opt-letter{font-family:'Fredoka One',cursive;font-size:17px;color:var(--muted);display:block;margin-bottom:3px}
 .q-opt.correct{border-color:var(--p4);background:rgba(0,210,160,0.15);color:var(--p4)}
 .q-opt.wrong{border-color:var(--p1);background:rgba(255,71,87,0.15)}
-.q-opt.chosen-wrong{border-color:var(--p1);background:rgba(255,71,87,0.2)}
 
 /* tally */
 .q-tally-section{margin-top:16px;padding:14px;background:var(--surface);border-radius:14px}
 .q-tally-label{font-size:12px;color:var(--muted);margin-bottom:8px;text-align:center;font-weight:700}
-.q-tally-chips{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
-.tally-chip{padding:5px 12px;border-radius:50px;font-size:12px;font-weight:800;
-  border:2px solid transparent;transition:all 0.3s;display:flex;align-items:center;gap:4px}
-.tally-chip.waiting{opacity:0.5}
-.tally-chip.answered{opacity:1}
-
-/* per-player answer display */
 .q-answers-grid{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:10px}
 .ans-card{background:var(--surface);border:2px solid var(--border);border-radius:12px;
   padding:8px 12px;text-align:center;min-width:90px;transition:all 0.3s}
@@ -135,6 +127,7 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
   font-family:'Fredoka One',cursive;font-size:19px;padding:13px;border-radius:50px;
   cursor:pointer;margin-top:14px;display:none;box-shadow:0 6px 20px rgba(69,208,245,0.35);transition:transform 0.15s}
 .q-next.show{display:block}.q-next:hover{transform:scale(1.03)}
+.q-next.wait{background:var(--muted);color:#fff;cursor:default;box-shadow:none}
 
 /* ── END ── */
 #end-screen{align-items:center;justify-content:center;gap:20px;
@@ -162,7 +155,6 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
 </head>
 <body>
 
-<!-- LOBBY -->
 <div class="screen on" id="lobby">
   <div class="lobby-title">🎲 Carrera contra el <span class="ph">Phishing</span></div>
   <div class="room-card">
@@ -177,15 +169,14 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
   <div class="min-note">Mínimo 2 jugadores · Máximo 6 jugadores</div>
 </div>
 
-<!-- GAME -->
 <div class="screen" id="game">
   <div class="board-panel">
     <svg id="board-svg" viewBox="0 0 700 620" preserveAspectRatio="xMidYMid meet" width="100%" height="100%"></svg>
     <div class="legend">
       <div class="leg-item"><div class="leg-dot" style="background:#00d2a0"></div>🏁 Inicio</div>
       <div class="leg-item"><div class="leg-dot" style="background:#ffd32a"></div>🏆 Meta</div>
-      <div class="leg-item"><div class="leg-dot" style="background:#b8a4ff"></div>⭐ Bonus</div>
-      <div class="leg-item"><div class="leg-dot" style="background:#ff4757"></div>💀 Peligro</div>
+      <div class="leg-item"><div class="leg-dot" style="background:#ff8800"></div>🔥 Desafío (Todos)</div>
+      <div class="leg-item"><div class="leg-dot" style="background:#1e1e40;border:2px solid #3a3a70"></div>📍 Normal (Individual)</div>
     </div>
   </div>
   <div class="sidebar">
@@ -200,7 +191,6 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
   </div>
 </div>
 
-<!-- QUESTION OVERLAY -->
 <div id="q-overlay">
   <div class="q-box">
     <div class="q-header">
@@ -219,7 +209,6 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
   </div>
 </div>
 
-<!-- END -->
 <div class="screen" id="end-screen">
   <canvas class="confetti-layer" id="confetti-canvas"></canvas>
   <div class="end-title">🎉 ¡Fin de la Partida!</div>
@@ -242,13 +231,12 @@ let currentQuestion = null;
 let timerInterval = null;
 let boardPositions = [];
 let revealDone = false;
+let skipTurns = {}; // { [playerId]: number }
 
 const BOARD_SIZE = 25;
 const WIN_CELL = 24;
 const CELL_TYPES = buildCellTypes();
 const COLORS = ['#ff4757','#45d0f5','#ffd32a','#00d2a0','#b8a4ff','#ff6fa3'];
-const TYPE_COLORS = {general:'#ff4757',tipo:'#45d0f5',url:'#ffd32a',defensa:'#00d2a0',tecnico:'#b8a4ff'};
-const TYPE_NAMES  = {general:'General',tipo:'Tipo de ataque',url:'Inspección URL',defensa:'Defensa',tecnico:'Técnico'};
 const DICE_FACES  = ['1️⃣','2️⃣','3️⃣','4️⃣','5️⃣','6️⃣'];
 
 function buildCellTypes(){
@@ -256,14 +244,12 @@ function buildCellTypes(){
   for(let i=0;i<BOARD_SIZE;i++){
     if(i===0) t.push('start');
     else if(i===WIN_CELL) t.push('end');
-    else if(i%5===0) t.push('star');
-    else if([3,8,13,18,22].includes(i)) t.push('bad');
+    else if(i%5===0) t.push('challenge'); // 5, 10, 15, 20
     else t.push('normal');
   }
   return t;
 }
 
-/* ─── INIT ─── */
 window.addEventListener('DOMContentLoaded', async ()=>{
   try{
     sb = createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -272,19 +258,15 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     sessionId = data.id;
     roomCode   = data.room_code;
     document.getElementById('room-code').textContent = roomCode;
-    document.getElementById('player-url').textContent =
-      location.href.replace('host.html','player.html') + '?room=' + roomCode;
+    document.getElementById('player-url').textContent = location.href.replace('host.html','player.html') + '?room=' + roomCode;
     subscribeRealtime();
   } catch(e){ showToast('❌ Error: '+e.message); }
 });
 
-/* ─── REALTIME ─── */
 function subscribeRealtime(){
   sb.channel('host:'+sessionId)
-    .on('postgres_changes',{event:'*',schema:'public',table:'players',
-        filter:`session_id=eq.${sessionId}`}, ()=> onPlayersUpdate())
-    .on('postgres_changes',{event:'INSERT',schema:'public',table:'game_events',
-        filter:`session_id=eq.${sessionId}`}, payload=> onGameEvent(payload.new))
+    .on('postgres_changes',{event:'*',schema:'public',table:'players', filter:`session_id=eq.${sessionId}`}, ()=> onPlayersUpdate())
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'game_events', filter:`session_id=eq.${sessionId}`}, payload=> onGameEvent(payload.new))
     .subscribe();
 }
 
@@ -301,24 +283,21 @@ async function onPlayersUpdate(){
 }
 
 async function onGameEvent(ev){
-  if(ev.event_type === 'player_joined'){
-    showToast(`🎮 ${ev.payload.name} se unió!`);
-  }
+  if(ev.event_type === 'player_joined') showToast(`🎮 ${ev.payload.name} se unió!`);
   if(ev.event_type === 'dice_rolled'){
-    // Player rolled — animate on board and move
     await refreshPlayers();
-    const roll = ev.payload.roll;
-    animateDiceHost(roll, ev.payload.player_id);
+    animateDiceHost(ev.payload.roll, ev.payload.player_id);
+  }
+  if(ev.event_type === 'penalty_chosen'){
+    await handlePenaltyChoice(ev.payload.player_id, ev.payload.choice);
   }
 }
 
 async function refreshPlayers(){
-  const { data } = await sb.from('players').select('*')
-    .eq('session_id', sessionId).eq('is_active', true).order('turn_order');
+  const { data } = await sb.from('players').select('*').eq('session_id', sessionId).eq('is_active', true).order('turn_order');
   if(data) players = data;
 }
 
-/* ─── LOBBY ─── */
 function renderLobbyPlayers(){
   const cont = document.getElementById('lobby-players');
   if(!players.length){
@@ -334,7 +313,7 @@ function renderLobbyPlayers(){
 function checkStartBtn(){ document.getElementById('start-btn').disabled = players.length < 2; }
 
 async function startGame(){
-  if(players.length < 2){ showToast('Se necesitan al menos 2 jugadores'); return; }
+  if(players.length < 2) return;
   await sb.from('game_sessions').update({status:'active', current_turn:0}).eq('id', sessionId);
   await sb.from('game_events').insert({session_id:sessionId, event_type:'game_started', payload:{}});
   document.getElementById('lobby').classList.remove('on');
@@ -345,7 +324,6 @@ async function startGame(){
   setTurnUI();
 }
 
-/* ─── BOARD ─── */
 function drawBoard(){
   const svg = document.getElementById('board-svg');
   svg.innerHTML = '';
@@ -362,25 +340,20 @@ function drawBoard(){
   }
   for(let i=0;i<BOARD_SIZE-1;i++){
     if(!boardPositions[i]||!boardPositions[i+1]) continue;
-    svg.appendChild(mkEl('line',{x1:boardPositions[i].x,y1:boardPositions[i].y,
-      x2:boardPositions[i+1].x,y2:boardPositions[i+1].y,
-      stroke:'#2a2a55','stroke-width':'4','stroke-dasharray':'8 5'}));
+    svg.appendChild(mkEl('line',{x1:boardPositions[i].x,y1:boardPositions[i].y, x2:boardPositions[i+1].x,y2:boardPositions[i+1].y, stroke:'#2a2a55','stroke-width':'4','stroke-dasharray':'8 5'}));
   }
   for(let i=0;i<BOARD_SIZE;i++){
     const p=boardPositions[i], type=CELL_TYPES[i];
     let fill='#1e1e40',stroke='#3a3a70',emoji='',label='';
     if(type==='start'){fill='#00d2a0';stroke='#00a87e';emoji='🏁'}
     else if(type==='end'){fill='#ffd32a';stroke='#d9b000';emoji='🏆'}
-    else if(type==='star'){fill='#b8a4ff';stroke='#9080f0';emoji='⭐'}
-    else if(type==='bad'){fill='#ff4757';stroke='#cc2233';emoji='💀'}
+    else if(type==='challenge'){fill='#ff8800';stroke='#e67a00';emoji='🔥'}
     else{label=String(i)}
     const g=document.createElementNS('http://www.w3.org/2000/svg','g');
-    g.id=`cell-${i}`;
-    if(type!=='normal') g.appendChild(mkEl('circle',{cx:p.x,cy:p.y,r:R+6,fill,opacity:'0.22'}));
+    if(type==='challenge') g.appendChild(mkEl('circle',{cx:p.x,cy:p.y,r:R+6,fill,opacity:'0.22'}));
     g.appendChild(mkEl('circle',{cx:p.x,cy:p.y,r:R,fill,stroke,'stroke-width':'2.5'}));
-    g.appendChild(emoji ? mkTxt(p.x,p.y+2,emoji,'22px','#fff') : Object.assign(mkTxt(p.x,p.y+2,label,'13px','#7777aa'),{setAttribute:()=>{}}));
-    if(!emoji){const t=mkTxt(p.x,p.y+2,label,'13px','#7777aa');t.setAttribute('font-weight','bold');g.appendChild(t);}
-    else g.appendChild(mkTxt(p.x,p.y+2,emoji,'22px','#fff'));
+    if(emoji) g.appendChild(mkTxt(p.x,p.y+2,emoji,'22px','#fff'));
+    else g.appendChild(mkTxt(p.x,p.y+2,label,'13px','#7777aa',true));
     svg.appendChild(g);
   }
   renderPlayerTokens();
@@ -390,10 +363,11 @@ function mkEl(tag,attrs){
   Object.entries(attrs).forEach(([k,v])=>el.setAttribute(k,v));
   return el;
 }
-function mkTxt(x,y,txt,size,fill){
+function mkTxt(x,y,txt,size,fill,bold=false){
   const t=document.createElementNS('http://www.w3.org/2000/svg','text');
   t.setAttribute('x',x);t.setAttribute('y',y);t.setAttribute('text-anchor','middle');
   t.setAttribute('dominant-baseline','central');t.setAttribute('font-size',size);t.setAttribute('fill',fill);
+  if(bold) t.setAttribute('font-weight','bold');
   t.textContent=txt;return t;
 }
 function renderPlayerTokens(){
@@ -412,7 +386,6 @@ function renderPlayerTokens(){
   });
 }
 
-/* ─── SCOREBOARD ─── */
 function renderScoreboard(){
   const sorted=[...players].sort((a,b)=>b.stars-a.stars||b.position-a.position);
   document.getElementById('score-list').innerHTML=sorted.map((p,rank)=>`
@@ -420,13 +393,12 @@ function renderScoreboard(){
       <div class="score-av">${p.avatar}</div>
       <div class="score-info">
         <div class="score-name" style="color:${p.color}">${p.name}</div>
-        <div class="score-sub">⭐ ${p.stars} · Casilla ${p.position}</div>
+        <div class="score-sub">⭐ ${p.stars} · Casilla ${p.position} ${skipTurns[p.id]?'(⏳ Pierde turno)':''}</div>
       </div>
       <div class="score-num" style="color:${p.color}">${rank===0?'👑':rank+1}</div>
     </div>`).join('');
 }
 
-/* ─── TURN ─── */
 function setTurnUI(){
   const p = players[currentTurnIdx];
   if(!p) return;
@@ -438,7 +410,6 @@ function setTurnUI(){
   renderScoreboard();
 }
 
-/* ─── DICE (host sees animation when player rolls) ─── */
 function animateDiceHost(finalRoll, playerId){
   const el = document.getElementById('dice-display');
   let t = 0;
@@ -454,7 +425,6 @@ function animateDiceHost(finalRoll, playerId){
   }, 80);
 }
 
-/* ─── MOVE ─── */
 async function processMove(playerId, steps){
   await refreshPlayers();
   const p = players.find(pl=>pl.id===playerId);
@@ -469,55 +439,31 @@ async function processMove(playerId, steps){
   if(newPos === WIN_CELL){ endGame(); return; }
 
   const type = CELL_TYPES[newPos];
-  if(type==='bad'){
-    const pen = Math.max(0, newPos-3);
-    await sb.from('players').update({position: pen}).eq('id', p.id);
-    await refreshPlayers();
-    renderPlayerTokens();
-    showToast(`💀 ${p.name} cae en casilla peligrosa y retrocede 3!`);
-    setTimeout(()=> triggerQuestion(true), 700);
-  } else if(type==='star'){
-    await sb.from('players').update({stars: p.stars+1}).eq('id', p.id);
-    await refreshPlayers();
-    renderScoreboard();
-    showToast(`⭐ ${p.name} gana estrella bonus!`);
-    setTimeout(()=> triggerQuestion(false), 700);
-  } else {
-    setTimeout(()=> triggerQuestion(false), 400);
-  }
+  const isChallenge = type === 'challenge';
+  setTimeout(()=> triggerQuestion(isChallenge, p.id), 500);
 }
 
-/* ─── QUESTION ─── */
 let usedQIds = [];
-async function triggerQuestion(isBad){
-  // Fetch question
+async function triggerQuestion(isChallenge, targetId){
   let q;
   if(usedQIds.length){
-    const {data} = await sb.from('question_bank').select('*')
-      .not('id','in',`(${usedQIds.join(',')})`).limit(100);
+    const {data} = await sb.from('question_bank').select('*').not('id','in',`(${usedQIds.join(',')})`).limit(100);
     if(data?.length) q = data[Math.floor(Math.random()*data.length)];
   }
   if(!q){
     const {data} = await sb.from('question_bank').select('*').limit(100);
     if(data?.length){ q = data[Math.floor(Math.random()*data.length)]; usedQIds=[]; }
   }
-  if(!q){ showToast('No hay preguntas en la base de datos'); advanceTurn(); return; }
+  if(!q){ showToast('No hay preguntas en la BD'); advanceTurn(); return; }
   usedQIds.push(q.id);
-  currentQuestion = q;
+  
   revealDone = false;
-
   const opts = typeof q.options==='string' ? JSON.parse(q.options) : q.options;
-  const qPayload = {...q, options: opts, is_bad: isBad};
+  const qPayload = {...q, options: opts, is_challenge: isChallenge, target: isChallenge ? 'all' : targetId};
+  currentQuestion = qPayload;
 
-  // Reset players' answered state
-  await sb.from('players').update({answered:false, last_answer:null, last_correct:null})
-    .eq('session_id', sessionId);
-
-  // Push question to session so phones receive it
-  await sb.from('game_sessions').update({
-    status:'question',
-    current_question: qPayload
-  }).eq('id', sessionId);
+  await sb.from('players').update({answered:false, last_answer:null, last_correct:null}).eq('session_id', sessionId);
+  await sb.from('game_sessions').update({status:'question', current_question: qPayload, penalty_players: null}).eq('id', sessionId);
 
   await refreshPlayers();
   showQuestionOverlay(qPayload);
@@ -525,20 +471,15 @@ async function triggerQuestion(isBad){
 
 function showQuestionOverlay(q){
   const opts = Array.isArray(q.options) ? q.options : JSON.parse(q.options);
-  const color = TYPE_COLORS[q.category]||'#888';
   const badge = document.getElementById('q-badge');
-  badge.textContent = (q.is_bad?'💀 Peligrosa — ':'') + (TYPE_NAMES[q.category]||'Pregunta');
-  badge.style.background = color;
+  badge.textContent = q.is_challenge ? '🔥 DESAFÍO MULTIJUGADOR' : '📍 PREGUNTA INDIVIDUAL';
+  badge.style.background = q.is_challenge ? '#ff8800' : '#45d0f5';
 
   document.getElementById('q-text').textContent = `${q.emoji} ${q.question}`;
-
   document.getElementById('q-opts').innerHTML = opts.map((opt,i)=>`
-    <div class="q-opt" id="qh-${i}">
-      <span class="opt-letter">${String.fromCharCode(65+i)}</span>${opt}
-    </div>`).join('');
+    <div class="q-opt" id="qh-${i}"><span class="opt-letter">${String.fromCharCode(65+i)}</span>${opt}</div>`).join('');
 
   document.getElementById('q-feedback').className = 'q-feedback';
-  document.getElementById('q-next').className = 'q-next';
   renderAnswersGrid();
   startTimer();
   document.getElementById('q-overlay').classList.add('open');
@@ -546,37 +487,27 @@ function showQuestionOverlay(q){
 
 function renderAnswersGrid(){
   const grid = document.getElementById('answers-grid');
-  const answered = players.filter(p=>p.answered).length;
-  document.getElementById('tally-label').textContent =
-    revealDone
-      ? `Resultados (${answered}/${players.length} respondieron)`
-      : `📱 Esperando respuestas… ${answered}/${players.length}`;
+  const expected = currentQuestion.is_challenge ? players : players.filter(p => p.id === currentQuestion.target);
+  const answeredCount = expected.filter(p=>p.answered).length;
+  
+  document.getElementById('tally-label').textContent = revealDone 
+    ? `Resultados (${answeredCount}/${expected.length})` 
+    : `📱 Esperando respuestas… ${answeredCount}/${expected.length}`;
 
-  const q = currentQuestion;
-  const correctIdx = q?.correct_index ?? -1;
-
-  grid.innerHTML = players.map(p=>{
+  grid.innerHTML = expected.map(p=>{
     if(!p.answered){
-      return `<div class="ans-card waiting">
-        <div class="ac-av">${p.avatar}</div>
-        <div class="ac-name" style="color:${p.color}">${p.name}</div>
-        <div class="ac-choice" style="color:var(--muted)">…</div>
-      </div>`;
+      return `<div class="ans-card"><div class="ac-av">${p.avatar}</div><div class="ac-name" style="color:${p.color}">${p.name}</div><div class="ac-choice" style="color:var(--muted)">…</div></div>`;
     }
     const letter = p.last_answer != null ? String.fromCharCode(65+p.last_answer) : '—';
-    const cls = revealDone ? (p.last_correct?'correct':'wrong') : 'answered';
-    return `<div class="ans-card ${cls}">
-      <div class="ac-av">${p.avatar}</div>
-      <div class="ac-name" style="color:${p.color}">${p.name}</div>
-      <div class="ac-choice">${letter}</div>
-    </div>`;
+    const cls = revealDone ? (p.last_correct?'correct':'wrong') : '';
+    return `<div class="ans-card ${cls}"><div class="ac-av">${p.avatar}</div><div class="ac-name" style="color:${p.color}">${p.name}</div><div class="ac-choice">${letter}</div></div>`;
   }).join('');
 }
 
 function checkAllAnswered(){
   if(revealDone) return;
-  const active = players.filter(p=>p.is_active);
-  if(active.length && active.every(p=>p.answered)){
+  const expected = currentQuestion.is_challenge ? players : players.filter(p => p.id === currentQuestion.target);
+  if(expected.length && expected.every(p=>p.answered)){
     clearInterval(timerInterval);
     revealAnswer();
   }
@@ -602,55 +533,81 @@ async function revealAnswer(){
   await refreshPlayers();
 
   const q = currentQuestion;
+  const expected = q.is_challenge ? players : players.filter(p => p.id === q.target);
   const opts = Array.isArray(q.options)?q.options:JSON.parse(q.options);
 
-  // Highlight correct option
   opts.forEach((_,i)=>{
     const el=document.getElementById(`qh-${i}`);
-    if(!el) return;
-    if(i===q.correct_index) el.classList.add('correct');
+    if(el && i===q.correct_index) el.classList.add('correct');
   });
 
-  // Apply score consequences
-  for(const p of players){
-    if(p.last_correct){
-      await sb.from('players').update({stars: p.stars+1}).eq('id',p.id);
-    } else if(p.answered && p.last_correct===false){
-      const pen=Math.max(0,p.position-2);
-      await sb.from('players').update({position:pen}).eq('id',p.id);
-    }
+  let wrongIds = [];
+  for(const p of expected){
+    if(p.last_correct) await sb.from('players').update({stars: p.stars+1}).eq('id',p.id);
+    else if(p.answered && p.last_correct===false) wrongIds.push(p.id);
   }
   await refreshPlayers();
   renderScoreboard();
-  renderPlayerTokens();
   renderAnswersGrid();
 
   const fb = document.getElementById('q-feedback');
   fb.innerHTML = `✅ <strong>Respuesta correcta: ${String.fromCharCode(65+q.correct_index)}) ${opts[q.correct_index]}</strong><br><span style="opacity:0.8">${q.explanation}</span>`;
   fb.className = 'q-feedback show';
-  document.getElementById('q-next').className = 'q-next show';
+  
+  const nextBtn = document.getElementById('q-next');
+  if(wrongIds.length > 0){
+    await sb.from('game_sessions').update({status:'penalty_phase', penalty_players: wrongIds}).eq('id', sessionId);
+    nextBtn.textContent = "Esperando elección de castigo...";
+    nextBtn.className = "q-next show wait";
+    nextBtn.onclick = () => {};
+  } else {
+    nextBtn.textContent = "Siguiente turno →";
+    nextBtn.className = "q-next show";
+    nextBtn.onclick = closeQuestion;
+  }
+}
 
-  // Notify phones that question is closed
-  await sb.from('game_events').insert({session_id:sessionId,event_type:'question_closed',
-    payload:{correct_index:q.correct_index}});
+async function handlePenaltyChoice(playerId, choice){
+  if(choice === 'star'){
+    const p = players.find(x=>x.id===playerId);
+    await sb.from('players').update({stars: Math.max(0, p.stars-1)}).eq('id', playerId);
+  } else if (choice === 'turn') {
+    skipTurns[playerId] = (skipTurns[playerId] || 0) + 1;
+  }
+
+  const {data: sess} = await sb.from('game_sessions').select('penalty_players').eq('id', sessionId).single();
+  let pending = sess.penalty_players || [];
+  pending = pending.filter(id => id !== playerId);
+  await sb.from('game_sessions').update({penalty_players: pending}).eq('id', sessionId);
+
+  await refreshPlayers();
+  renderScoreboard();
+
+  if(pending.length === 0) closeQuestion();
 }
 
 async function closeQuestion(){
   document.getElementById('q-overlay').classList.remove('open');
   clearInterval(timerInterval);
-  await sb.from('game_sessions').update({status:'active', current_question:null}).eq('id',sessionId);
-  currentTurnIdx = (currentTurnIdx+1) % players.length;
+  await sb.from('game_sessions').update({status:'active', current_question:null, penalty_players: null}).eq('id',sessionId);
+  advanceTurn();
+}
+
+async function advanceTurn(){
+  let found = false;
+  while(!found){
+    currentTurnIdx = (currentTurnIdx+1) % players.length;
+    const pid = players[currentTurnIdx].id;
+    if(skipTurns[pid] > 0){
+      skipTurns[pid]--;
+      showToast(`⏳ ${players[currentTurnIdx].name} pierde su turno.`);
+    } else found = true;
+  }
   await sb.from('game_sessions').update({current_turn: currentTurnIdx}).eq('id',sessionId);
   await refreshPlayers();
   setTurnUI();
 }
 
-function advanceTurn(){
-  currentTurnIdx = (currentTurnIdx+1) % players.length;
-  setTurnUI();
-}
-
-/* ─── END ─── */
 async function endGame(){
   gameOver = true;
   await sb.from('game_sessions').update({status:'ended'}).eq('id',sessionId);
@@ -669,17 +626,14 @@ async function endGame(){
   launchConfetti();
 }
 
-/* ─── CONFETTI ─── */
 function launchConfetti(){
   const canvas=document.getElementById('confetti-canvas');
   const ctx=canvas.getContext('2d');
   canvas.width=canvas.parentElement.offsetWidth;
   canvas.height=canvas.parentElement.offsetHeight;
   const pieces=Array.from({length:160},()=>({
-    x:Math.random()*canvas.width,y:Math.random()*-canvas.height,
-    w:Math.random()*12+4,h:Math.random()*16+6,
-    color:COLORS[Math.floor(Math.random()*COLORS.length)],
-    speed:Math.random()*4+2,angle:Math.random()*360,spin:Math.random()*10-5
+    x:Math.random()*canvas.width,y:Math.random()*-canvas.height, w:Math.random()*12+4,h:Math.random()*16+6,
+    color:COLORS[Math.floor(Math.random()*COLORS.length)], speed:Math.random()*4+2,angle:Math.random()*360,spin:Math.random()*10-5
   }));
   (function draw(){
     ctx.clearRect(0,0,canvas.width,canvas.height);
@@ -692,7 +646,6 @@ function launchConfetti(){
   })();
 }
 
-/* ─── TOAST ─── */
 let toastT;
 function showToast(msg){
   const t=document.getElementById('toast');
