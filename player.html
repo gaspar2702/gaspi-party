@@ -336,7 +336,6 @@ async function onSessionChange(sess){
     const q = sess.current_question;
     clearInterval(timerInterval);
     
-    // Si entramos recientemente o si venimos de un fallback vacío, renderizamos la vista de penalidad pura
     if(prevStatus !== 'penalty'){
       penaltySubmitted = false;
       show('penalty');
@@ -344,7 +343,22 @@ async function onSessionChange(sess){
     renderPenaltyScreen(q);
     return;
   }
-  if(prevStatus === 'question' || prevStatus === 'penalty'){
+  
+  // Evitar que el celular pase a la pantalla principal antes que el profesor lance el próximo turno
+  if(sess.status === 'penalty_done'){
+    if(document.getElementById('question').classList.contains('on')){
+      const waitEl = document.getElementById('qsm-wait');
+      waitEl.classList.add('show');
+      waitEl.textContent = '✅ Todos listos. Esperando al profesor...';
+    } else if(document.getElementById('penalty').classList.contains('on')){
+      document.getElementById('penalty-me').style.display = 'none';
+      document.getElementById('penalty-other').style.display = 'block';
+      document.getElementById('penalty-other').innerHTML = '<div class="wait-av" style="font-size:50px">✅</div><div style="color:var(--muted); margin-top:20px;">Todos eligieron. Esperando al profesor...</div>';
+    }
+    return;
+  }
+
+  if(prevStatus === 'question' || prevStatus === 'penalty' || prevStatus === 'penalty_done'){
     hasAnswered = false;
     penaltySubmitted = false;
     clearInterval(timerInterval);
@@ -375,6 +389,9 @@ function renderCurrentView(){
   }
   else if(s === 'penalty'){
     renderPenaltyScreen(currentSession.current_question);
+  }
+  else if(s === 'penalty_done'){
+    return; // No interviene, el estado espera transición a active.
   }
   else renderSpectate(currentSession);
 }
