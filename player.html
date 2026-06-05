@@ -97,7 +97,6 @@ body{
 </head>
 <body>
 
-<!-- JOIN -->
 <div class="screen" id="join">
   <div class="join-logo">🎲 Carrera contra<br>el <span class="ph">Phishing</span></div>
   <div class="join-card">
@@ -117,7 +116,6 @@ body{
   </div>
 </div>
 
-<!-- WAITING -->
 <div class="screen" id="waiting">
   <div class="wait-av" id="wait-av">🎮</div>
   <div class="wait-name" id="wait-name">¡Listo!</div>
@@ -125,7 +123,6 @@ body{
   <div class="players-mini" id="players-mini"></div>
 </div>
 
-<!-- SPECTATE -->
 <div class="screen" id="spectate">
   <div class="my-status-card">
     <div class="my-av-big" id="sp-av">🎮</div>
@@ -150,7 +147,6 @@ body{
   </div>
 </div>
 
-<!-- QUESTION -->
 <div class="screen" id="question">
   <div class="q-top">
     <div class="q-badge-sm" id="qsm-badge">Pregunta</div>
@@ -163,7 +159,6 @@ body{
   <div class="feedback-box" id="qsm-feedback"></div>
 </div>
 
-<!-- PENALTY -->
 <div class="screen" id="penalty">
   <div class="penalty-title">⚠️ ¡Reto Fallado!</div>
 
@@ -179,7 +174,6 @@ body{
   </div>
 </div>
 
-<!-- END -->
 <div class="screen" id="end">
   <div class="end-big" id="end-medal">🏅</div>
   <div class="end-title" id="end-title">¡Fin de la partida!</div>
@@ -209,10 +203,10 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 let sb=null, sessionId=null, myPlayerId=null, myPlayer=null, allPlayers=[];
 let currentSession=null, timerInterval=null, timerSec=30, myAvatar='🎮';
 let hasAnswered=false, qCurrent=null;
-let isRolling=false; // guard against double-roll
-let penaltySubmitted=false; // guard against double-penalty
-let lastSessionStatus=''; // track transitions in fallback poller
-let lastQuestionId=null; // track which question is currently shown
+let isRolling=false;
+let penaltySubmitted=false;
+let lastSessionStatus='';
+let lastQuestionId=null;
 
 const AVATARS = ['🕵️','🐱','🤖','🦸','🧙','👾','🦊','🐧','🦄','🐲','🐼','🦋','🎩','🚀','🦁'];
 const TYPE_COLORS={general:'#ff4757',tipo:'#45d0f5',url:'#ffd32a',defensa:'#00d2a0',tecnico:'#b8a4ff'};
@@ -314,7 +308,6 @@ async function onSessionChange(sess){
   const prevStatus = lastSessionStatus;
   lastSessionStatus = sess.status;
 
-  // Sync local player data
   await refreshAll();
 
   if(sess.status === 'lobby'){
@@ -327,7 +320,6 @@ async function onSessionChange(sess){
   if(sess.status === 'question'){
     const q = sess.current_question;
     if(!q) return;
-    // Only re-render question if it's a new question (different ID)
     const qId = q.id + '_' + q.tile_type + '_' + (q.active_player || '');
     if(qId !== lastQuestionId){
       lastQuestionId = qId;
@@ -336,7 +328,6 @@ async function onSessionChange(sess){
       renderQuestionScreen(q);
       show('question');
     } else {
-      // Same question — just refresh the answer tally display
       renderAnswerTally();
     }
     return;
@@ -344,17 +335,16 @@ async function onSessionChange(sess){
   if(sess.status === 'penalty'){
     const q = sess.current_question;
     clearInterval(timerInterval);
-    // If coming from question screen, make sure penalty screen is correct
-    if(prevStatus === 'question' || prevStatus === 'penalty'){
+    
+    // Si entramos recientemente o si venimos de un fallback vacío, renderizamos la vista de penalidad pura
+    if(prevStatus !== 'penalty'){
       penaltySubmitted = false;
-      renderPenaltyScreen(q);
       show('penalty');
     }
+    renderPenaltyScreen(q);
     return;
   }
-  // status === 'active'
   if(prevStatus === 'question' || prevStatus === 'penalty'){
-    // Question/penalty cycle ended — reset and go back to spectate
     hasAnswered = false;
     penaltySubmitted = false;
     clearInterval(timerInterval);
@@ -381,7 +371,6 @@ function renderCurrentView(){
   if(s === 'lobby') renderWaiting();
   else if(s === 'ended') showEndScreen();
   else if(s === 'question'){
-    // Only update tally; don't re-render the whole question (would lose answer state)
     renderAnswerTally();
   }
   else if(s === 'penalty'){
@@ -412,7 +401,6 @@ function renderSpectate(sess){
 
     if(active.id === myPlayerId){
       document.getElementById('sp-roll-area').style.display='block';
-      // Only re-enable if not currently rolling
       if(!isRolling){
         document.getElementById('sp-roll-btn').disabled=false;
         document.getElementById('sp-roll-btn').textContent='🎲 LANZAR DADO';
@@ -424,7 +412,7 @@ function renderSpectate(sess){
 }
 
 async function rollDice(){
-  if(isRolling) return; // guard double-tap
+  if(isRolling) return;
   isRolling = true;
   const btn = document.getElementById('sp-roll-btn');
   btn.disabled = true;
@@ -443,7 +431,6 @@ async function rollDice(){
     btn.textContent='🎲 LANZAR DADO';
     isRolling=false;
   }
-  // isRolling stays true — will be reset when spectate view is re-rendered on next turn
 }
 
 function renderQuestionScreen(q){
@@ -482,8 +469,6 @@ function renderQuestionScreen(q){
 }
 
 function renderAnswerTally(){
-  // Called when players table updates during an active question
-  // If I've already answered, just show wait message
   if(hasAnswered && document.getElementById('question').classList.contains('on')){
     document.getElementById('qsm-wait').classList.add('show');
   }
@@ -499,7 +484,6 @@ function startPlayerTimer(){
     document.getElementById('qsm-timer').textContent=Math.max(0,timerSec);
     if(timerSec<=0){
       clearInterval(timerInterval);
-      // Auto-submit if player didn't answer and it's their turn
       if(!hasAnswered && qCurrent){
         const amIActive = qCurrent.tile_type==='challenge' || qCurrent.active_player===myPlayerId;
         if(amIActive) handleTimeOut();
@@ -511,7 +495,6 @@ function startPlayerTimer(){
 async function handleTimeOut(){
   if(hasAnswered) return;
   hasAnswered = true;
-  // Mark as answered with null (timed out) so host knows
   try{
     await sb.from('players').update({ answered:true, last_answer:null, last_correct:false }).eq('id',myPlayerId);
   }catch(e){ /* ignore */ }
@@ -524,7 +507,6 @@ async function answerQuestion(idx){
   hasAnswered=true;
   clearInterval(timerInterval);
 
-  // Disable all buttons immediately
   document.querySelectorAll('.q-opt-btn').forEach(b=>b.disabled=true);
   document.getElementById(`popt-${idx}`)?.classList.add('selected');
 
@@ -570,7 +552,6 @@ function renderPenaltyScreen(q){
   document.getElementById('penalty-me').style.display = iAmPenalized ? 'block' : 'none';
   document.getElementById('penalty-other').style.display = iAmPenalized ? 'none' : 'block';
 
-  // Reset penalty buttons if I am penalized and haven't submitted yet
   if(iAmPenalized && !penaltySubmitted){
     const starBtn = document.getElementById('penalty-star-btn');
     const turnBtn = document.getElementById('penalty-turn-btn');
@@ -607,18 +588,14 @@ async function submitPenalty(choice){
 }
 
 /* ─── FALLBACK POLLER ─── */
-// Backs up realtime in case a websocket event is missed
-// Checks every 3 seconds for status changes
 setInterval(async()=>{
   if(!sessionId || !sb) return;
   try{
     const {data:s}=await sb.from('game_sessions').select('status,current_question,current_turn').eq('id',sessionId).single();
     if(!s) return;
 
-    // Only act if status changed (avoid re-rendering unnecessarily)
     if(s.status === lastSessionStatus) return;
 
-    // Detected a missed realtime event — handle it
     await onSessionChange(s);
   }catch(e){ /* network error, ignore */ }
 }, 3000);
@@ -642,7 +619,6 @@ async function showEndScreen(){
 function show(id){
   document.querySelectorAll('.screen').forEach(s=>s.classList.remove('on'));
   document.getElementById(id).classList.add('on');
-  // Reset isRolling when navigating away from spectate (new turn)
   if(id !== 'spectate') isRolling=false;
 }
 
