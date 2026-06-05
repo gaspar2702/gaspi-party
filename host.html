@@ -114,21 +114,14 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
 .ans-card{background:var(--surface);border:2px solid var(--border);border-radius:12px;
   padding:8px 12px;text-align:center;min-width:90px;transition:all 0.3s}
 .ans-card.answered{border-color:var(--p3);background:rgba(255,211,42,0.10)}
+.ans-card.correct{border-color:var(--p4);background:rgba(0,210,160,0.15); animation: correctPulse 0.5s ease-out;}
+@keyframes correctPulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); box-shadow: 0 0 20px rgba(0,210,160,0.5); } 100% { transform: scale(1); } }
 .ans-card.wrong{border-color:var(--p1);background:rgba(255,71,87,0.12)}
 .ans-card.spectating{opacity:0.35;filter:grayscale(100%)}
 .ans-card .ac-av{font-size:22px}
 .ans-card .ac-name{font-size:10px;font-weight:700;margin-top:2px;max-width:80px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ans-card .ac-choice{font-family:'Fredoka One',cursive;font-size:15px;margin-top:2px}
-
-/* ANIMACIÓN RESPUESTA CORRECTA HOST */
-@keyframes correctPulse {
-  0% { transform: scale(1); }
-  50% { transform: scale(1.1); box-shadow: 0 0 20px rgba(0,210,160,0.5); }
-  100% { transform: scale(1); }
-}
-.ans-card.correct{border-color:var(--p4);background:rgba(0,210,160,0.15); animation: correctPulse 0.5s ease-out;}
-
 .q-feedback{background:var(--surface);border-left:4px solid var(--p4);border-radius:0 12px 12px 0;
   padding:12px 14px;font-size:13px;line-height:1.5;margin-top:14px;display:none}
 .q-feedback.show{display:block}
@@ -163,7 +156,6 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
 </head>
 <body>
 
-<!-- LOBBY -->
 <div class="screen on" id="lobby">
   <div class="lobby-title">🎲 Carrera contra el <span class="ph">Phishing</span></div>
   <div class="room-card">
@@ -178,7 +170,6 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
   <div class="min-note">Mínimo 2 jugadores · Máximo 6 jugadores</div>
 </div>
 
-<!-- GAME -->
 <div class="screen" id="game">
   <div class="board-panel">
     <svg id="board-svg" viewBox="0 0 700 620" preserveAspectRatio="xMidYMid meet" width="100%" height="100%"></svg>
@@ -203,7 +194,6 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
   </div>
 </div>
 
-<!-- QUESTION OVERLAY -->
 <div id="q-overlay">
   <div class="q-box">
     <div class="q-header">
@@ -222,7 +212,6 @@ body{background:var(--bg);color:var(--text);font-family:'Nunito',sans-serif}
   </div>
 </div>
 
-<!-- END -->
 <div class="screen" id="end-screen">
   <canvas class="confetti-layer" id="confetti-canvas"></canvas>
   <div class="end-title">🎉 ¡Fin de la Partida!</div>
@@ -352,9 +341,8 @@ async function onGameEvent(ev){
   if(ev.event_type === 'penalty_chosen'){
     const { player_id, choice } = ev.payload;
     
-    // PREVENCIÓN DE RACE CONDITION: Modificamos el array de forma sincrónica ANTES de consultar la DB
     if (!currentQuestion || !currentQuestion.pending_penalties) return;
-    if (!currentQuestion.pending_penalties.includes(player_id)) return; // Evita doble-procesamiento
+    if (!currentQuestion.pending_penalties.includes(player_id)) return;
     
     currentQuestion.pending_penalties = currentQuestion.pending_penalties.filter(id => id !== player_id);
     let sessionUpdates = { current_question: currentQuestion };
@@ -416,10 +404,7 @@ async function startGame(){
     .update({ status: 'active', current_turn: 0, skipped_turns: [] })
     .eq('id', sessionId);
 
-  if (error) {
-    showToast('❌ Error DB: ' + error.message);
-    return; 
-  }
+  if (error) { showToast('❌ Error DB: ' + error.message); return; }
 
   await sb.from('game_events').insert({session_id: sessionId, event_type: 'game_started', payload: {}});
   
@@ -553,9 +538,8 @@ async function processMove(playerId, steps){
 
   let tileTypeForQuestion=landedType;
   if(landedType==='bad'){
-    newPos=Math.max(0, newPos-3);
-    tileTypeForQuestion='bad';
-    showToast(`💀 ¡${p.name} cayó en peligro! Retrocede 3 casillas.`);
+    // EL JUGADOR YA NO RETROCEDE DE INMEDIATO. RESPONDE PRIMERO.
+    showToast(`💀 ¡${p.name} cayó en peligro! Responde bien o retrocederás 2 casillas.`);
   }
 
   await sb.from('players').update({position:newPos}).eq('id',p.id);
@@ -577,9 +561,7 @@ async function triggerQuestion(tileType, playerId, playerName){
   revealDone=false;
   revealLock=false;
 
-  await sb.from('players')
-    .update({answered:false, last_answer:null, last_correct:null})
-    .eq('session_id', sessionId);
+  await sb.from('players').update({answered:false, last_answer:null, last_correct:null}).eq('session_id', sessionId);
 
   let q=null;
   if(usedQIds.length){
@@ -590,16 +572,13 @@ async function triggerQuestion(tileType, playerId, playerName){
     const {data}=await sb.from('question_bank').select('*').limit(100);
     if(data?.length){ q=data[Math.floor(Math.random()*data.length)]; usedQIds=[]; }
   }
-  if(!q){ showToast('No hay preguntas disponibles'); await advanceTurn(); return; }
+  if(!q){ showToast('No hay preguntas disponibles'); await advanceTurn('active', true); return; }
   usedQIds.push(q.id);
 
   const opts=typeof q.options==='string'?JSON.parse(q.options):q.options;
   const qPayload={
-    ...q, options:opts,
-    tile_type:tileType,
-    active_player:playerId,
-    active_player_name:playerName,
-    pending_penalties:[]
+    ...q, options:opts, tile_type:tileType, active_player:playerId,
+    active_player_name:playerName, pending_penalties:[]
   };
   currentQuestion=qPayload;
 
@@ -647,9 +626,7 @@ function renderAnswersGrid(){
   const required=isChallenge?players:players.filter(p=>p.id===q.active_player);
   const answered=required.filter(p=>p.answered);
 
-  document.getElementById('tally-label').textContent = revealDone
-    ? 'Resultados'
-    : `📱 ${answered.length}/${required.length} respondieron`;
+  document.getElementById('tally-label').textContent = revealDone ? 'Resultados' : `📱 ${answered.length}/${required.length} respondieron`;
 
   grid.innerHTML=players.map(p=>{
     const isSpectating=!isChallenge && p.id!==q.active_player;
@@ -739,11 +716,14 @@ async function revealAnswer(){
         } else if(q.tile_type==='normal'){
           await sb.from('players').update({position: Math.min(WIN_CELL, freshPlayer.position+1)}).eq('id',p.id);
           showToast(`✅ ${p.name} avanza 1 casilla extra!`);
+        } else if(q.tile_type==='bad'){
+          showToast(`✅ ¡${p.name} se salvó del peligro!`);
         }
       } else {
+        // PENALIDAD AL FALLAR EN CASILLA DE PELIGRO
         if(q.tile_type==='bad'){
           await sb.from('players').update({position: Math.max(0, freshPlayer.position-2)}).eq('id',p.id);
-          showToast(`💀 ${p.name} falla y retrocede 2 más!`);
+          showToast(`💀 ${p.name} falla y retrocede 2 casillas!`);
         }
       }
     }
