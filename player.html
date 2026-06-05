@@ -78,13 +78,17 @@ body{
 .q-opt-btn.wrong{border-color:var(--p1);background:rgba(255,71,87,0.15);color:var(--p1)}
 .wait-answer-msg{text-align:center;padding:14px;background:var(--card);border-radius:16px;font-size:14px;color:var(--muted);font-weight:700;display:none;}
 .wait-answer-msg.show{display:block}
+
+/* Animación bonita de entrada para el feedback */
+@keyframes popInFeedback { from { transform: scale(0.9); opacity: 0; } to { transform: scale(1); opacity: 1; } }
 .feedback-box{background:var(--card);border-radius:16px;padding:14px 16px;font-size:14px;line-height:1.5;display:none;border-left:4px solid var(--p4);}
-.feedback-box.show{display:block}
+.feedback-box.show{display:block; animation: popInFeedback 0.4s cubic-bezier(.34,1.56,.64,1);}
 
 /* ── PENALTY ── */
 .penalty-btn{background:var(--surface);border:2px solid var(--p1);color:var(--text);font-family:'Fredoka One',cursive;font-size:16px;padding:18px;border-radius:16px;width:100%;margin-top:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;}
 .penalty-btn:disabled{opacity:0.4;cursor:not-allowed;}
-.penalty-title{font-family:'Fredoka One',cursive;font-size:28px;color:var(--p7);margin-bottom:10px;}
+.penalty-title{font-family:'Fredoka One',cursive;font-size:28px;color:var(--p7);margin-bottom:10px; animation: shake 0.6s infinite alternate; text-shadow: 0 0 10px rgba(255,71,87,0.4);}
+@keyframes shake { 0% { transform: translateX(-3px); } 100% { transform: translateX(3px); } }
 
 /* ── END ── */
 .end-big{font-size:80px}
@@ -97,6 +101,9 @@ body{
 </head>
 <body>
 
+<canvas id="player-confetti" style="position:fixed;inset:0;pointer-events:none;z-index:9999;"></canvas>
+
+<!-- JOIN -->
 <div class="screen" id="join">
   <div class="join-logo">🎲 Carrera contra<br>el <span class="ph">Phishing</span></div>
   <div class="join-card">
@@ -116,6 +123,7 @@ body{
   </div>
 </div>
 
+<!-- WAITING -->
 <div class="screen" id="waiting">
   <div class="wait-av" id="wait-av">🎮</div>
   <div class="wait-name" id="wait-name">¡Listo!</div>
@@ -123,6 +131,7 @@ body{
   <div class="players-mini" id="players-mini"></div>
 </div>
 
+<!-- SPECTATE -->
 <div class="screen" id="spectate">
   <div class="my-status-card">
     <div class="my-av-big" id="sp-av">🎮</div>
@@ -147,6 +156,7 @@ body{
   </div>
 </div>
 
+<!-- QUESTION -->
 <div class="screen" id="question">
   <div class="q-top">
     <div class="q-badge-sm" id="qsm-badge">Pregunta</div>
@@ -159,6 +169,7 @@ body{
   <div class="feedback-box" id="qsm-feedback"></div>
 </div>
 
+<!-- PENALTY -->
 <div class="screen" id="penalty">
   <div class="penalty-title">⚠️ ¡Reto Fallado!</div>
 
@@ -174,6 +185,7 @@ body{
   </div>
 </div>
 
+<!-- END -->
 <div class="screen" id="end">
   <div class="end-big" id="end-medal">🏅</div>
   <div class="end-title" id="end-title">¡Fin de la partida!</div>
@@ -344,7 +356,6 @@ async function onSessionChange(sess){
     return;
   }
   
-  // Evitar que el celular pase a la pantalla principal antes que el profesor lance el próximo turno
   if(sess.status === 'penalty_done'){
     if(document.getElementById('question').classList.contains('on')){
       const waitEl = document.getElementById('qsm-wait');
@@ -391,7 +402,7 @@ function renderCurrentView(){
     renderPenaltyScreen(currentSession.current_question);
   }
   else if(s === 'penalty_done'){
-    return; // No interviene, el estado espera transición a active.
+    return; 
   }
   else renderSpectate(currentSession);
 }
@@ -542,6 +553,35 @@ async function answerQuestion(idx){
   showQuestionFeedback(idx,correct,q);
 }
 
+/* ─── CONFETI DEL JUGADOR ─── */
+function firePlayerConfetti(){
+  const canvas=document.getElementById('player-confetti');
+  const ctx=canvas.getContext('2d');
+  canvas.width=window.innerWidth;
+  canvas.height=window.innerHeight;
+  const colors = ['#00d2a0','#ffd32a','#45d0f5','#b8a4ff'];
+  const pieces=Array.from({length:60},()=>({
+    x:Math.random()*canvas.width, y: -Math.random()*canvas.height,
+    w:Math.random()*10+4, h:Math.random()*10+4,
+    color:colors[Math.floor(Math.random()*colors.length)],
+    speed:Math.random()*4+2, angle:Math.random()*360, spin:Math.random()*5-2.5
+  }));
+  let frame;
+  function draw(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    let active = false;
+    pieces.forEach(p=>{
+      ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.angle*Math.PI/180);
+      ctx.fillStyle=p.color;ctx.fillRect(-p.w/2,-p.h/2,p.w,p.h);ctx.restore();
+      p.y+=p.speed; p.angle+=p.spin;
+      if(p.y < canvas.height) active = true;
+    });
+    if(active) frame = requestAnimationFrame(draw);
+    else ctx.clearRect(0,0,canvas.width,canvas.height);
+  }
+  draw();
+}
+
 function showQuestionFeedback(idx,correct,q){
   const opts=typeof q?.options==='string'?JSON.parse(q.options):q?.options;
   if(opts && idx !== null){
@@ -555,6 +595,8 @@ function showQuestionFeedback(idx,correct,q){
       : `❌ <strong>Incorrecto.</strong> La correcta era ${String.fromCharCode(65+q.correct_index)}.<br>${q.explanation}`;
     fb.style.borderColor=correct?'var(--p4)':'var(--p1)';
     fb.classList.add('show');
+    
+    if(correct) firePlayerConfetti();
   }
   const waitEl = document.getElementById('qsm-wait');
   waitEl.classList.add('show');
@@ -594,7 +636,7 @@ async function submitPenalty(choice){
       payload: { choice, player_id: myPlayerId }
     });
     document.getElementById('penalty-me').innerHTML =
-      '<div style="color:var(--p4); font-size:20px; font-weight:bold;">✅ Elección enviada.</div>' +
+      '<div style="color:var(--p4); font-size:20px; font-weight:bold; animation: popInFeedback 0.4s ease-out;">✅ Elección enviada.</div>' +
       '<div style="color:var(--muted); margin-top:10px;">Mira la pantalla principal.</div>';
   }catch(e){
     showToast('Error al enviar elección, intenta de nuevo');
