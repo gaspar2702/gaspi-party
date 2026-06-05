@@ -226,16 +226,16 @@ const SUPABASE_URL = 'https://zuyjbeyveiaepbsyvdwl.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp1eWpiZXl2ZWlhZXBic3l2ZHdsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA2MTM4OTUsImV4cCI6MjA5NjE4OTg5NX0.S8f9kmuoG6jiyRO40y56CEzH2NCnZxEUKfltIPhHRrQ';
 
 let sb, sessionId, roomCode;
-let players = [];            // freshly fetched from DB each time
+let players = [];
 let currentTurnIdx = 0;
 let gameOver = false;
-let currentQuestion = null; // always the full payload stored in game_sessions
+let currentQuestion = null;
 let timerInterval = null;
 let boardPositions = [];
 let revealDone = false;
 let skippedTurns = new Set();
 let lastProcessedRollKey = null;
-let revealLock = false;     // prevents double-call to revealAnswer
+let revealLock = false;
 
 const BOARD_SIZE = 25;
 const WIN_CELL = 24;
@@ -295,7 +295,6 @@ async function onSessionUpdate(sess){
   if(!sess) return;
   if(Array.isArray(sess.skipped_turns)) skippedTurns = new Set(sess.skipped_turns);
   
-  // Mantiene sincronizada la pregunta actual para checkAllAnswered y renderAnswersGrid
   if(sess.current_question) {
     currentQuestion = sess.current_question;
     if(document.getElementById('q-overlay').classList.contains('open')) {
@@ -341,31 +340,39 @@ async function onGameEvent(ev){
   if(ev.event_type === 'penalty_chosen'){
     const { player_id, choice } = ev.payload;
     
+    // ATÓMICO: Juntamos las actualizaciones de game_sessions para evitar condiciones de carrera en los celulares.
+    let sessionUpdates = {};
+
     if(choice === 'star'){
-      // Corrección: Leer cuenta de estrellas fresca para no basarse en caché local
       const { data: freshPlayer } = await sb.from('players').select('stars').eq('id', player_id).single();
       if(freshPlayer){
         await sb.from('players').update({stars: Math.max(0, freshPlayer.stars - 1)}).eq('id', player_id);
       }
     } else {
       skippedTurns.add(player_id);
-      await sb.from('game_sessions').update({skipped_turns:[...skippedTurns]}).eq('id', sessionId);
+      sessionUpdates.skipped_turns = [...skippedTurns];
     }
 
     const { data: sess } = await sb.from('game_sessions')
       .select('current_question').eq('id', sessionId).single();
+      
     if(sess?.current_question){
       let cq = sess.current_question;
       cq.pending_penalties = (cq.pending_penalties||[]).filter(id => id !== player_id);
-      await sb.from('game_sessions').update({current_question: cq}).eq('id', sessionId);
+      sessionUpdates.current_question = cq;
 
       if(cq.pending_penalties.length === 0){
         document.getElementById('q-next').className = 'q-next show';
         const msg = document.getElementById('penalty-wait-msg');
         if(msg) msg.innerHTML = '✅ Todos eligieron su castigo.';
-        await sb.from('game_sessions').update({status:'penalty_done'}).eq('id', sessionId);
+        sessionUpdates.status = 'penalty_done';
       }
     }
+
+    if (Object.keys(sessionUpdates).length > 0) {
+      await sb.from('game_sessions').update(sessionUpdates).eq('id', sessionId);
+    }
+    
     await refreshPlayers();
     renderScoreboard();
   }
@@ -395,8 +402,18 @@ function checkStartBtn(){ document.getElementById('start-btn').disabled = player
 
 async function startGame(){
   if(players.length < 2){ showToast('Se necesitan al menos 2 jugadores'); return; }
-  await sb.from('game_sessions').update({status:'active',current_turn:0,skipped_turns:[]}).eq('id',sessionId);
-  await sb.from('game_events').insert({session_id:sessionId,event_type:'game_started',payload:{}});
+  
+  const { error } = await sb.from('game_sessions')
+    .update({ status: 'active', current_turn: 0, skipped_turns: [] })
+    .eq('id', sessionId);
+
+  if (error) {
+    showToast('❌ Error DB: ' + error.message);
+    return; 
+  }
+
+  await sb.from('game_events').insert({session_id: sessionId, event_type: 'game_started', payload: {}});
+  
   document.getElementById('lobby').classList.remove('on');
   document.getElementById('game').classList.add('on');
   drawBoard();
@@ -654,7 +671,6 @@ function checkAllAnswered(){
   const q=currentQuestion;
   if(!q) return;
   const isChallenge=q.tile_type==='challenge';
-  // Gracias a onSessionUpdate, currentQuestion está sincronizado por ende el tile_type es correcto.
   const required=isChallenge?players:players.filter(p=>p.id===q.active_player);
   if(required.length>0 && required.every(p=>p.answered)){
     clearInterval(timerInterval);
@@ -696,7 +712,6 @@ async function revealAnswer(){
   let pendingPenalties=[];
 
   for(const p of players){
-    // Consulta atómica del estado del jugador para evitar asignar estrellas sobre data vieja
     const { data: freshPlayer } = await sb.from('players').select('stars, position').eq('id', p.id).single();
     if(!freshPlayer) continue;
 
@@ -751,12 +766,12 @@ async function revealAnswer(){
 async function closeQuestion(){
   document.getElementById('q-overlay').classList.remove('open');
   clearInterval(timerInterval);
-  await sb.from('game_sessions').update({status:'active', current_question:null}).eq('id',sessionId);
-  await advanceTurn();
+  // Al pasar estos parámetros, la actualización se vuelve atómica en la DB
+  await advanceTurn('active', true);
 }
 
 /* ─── ADVANCE TURN ─── */
-async function advanceTurn(){
+async function advanceTurn(newStatus = null, clearQuestion = false){
   const {data:sess}=await sb.from('game_sessions').select('skipped_turns,current_turn').eq('id',sessionId).single();
   if(sess){
     skippedTurns=new Set(sess.skipped_turns||[]);
@@ -770,7 +785,11 @@ async function advanceTurn(){
   do{
     currentTurnIdx=(currentTurnIdx+1)%total;
     tries++;
-    if(tries>total){ skippedTurns.clear(); await sb.from('game_sessions').update({skipped_turns:[]}).eq('id',sessionId); break; }
+    if(tries>total){ 
+      skippedTurns.clear(); 
+      await sb.from('game_sessions').update({skipped_turns:[]}).eq('id',sessionId); 
+      break; 
+    }
     const c=players[currentTurnIdx];
     if(c && skippedTurns.has(c.id)){
       skippedTurns.delete(c.id);
@@ -779,7 +798,12 @@ async function advanceTurn(){
     } else { break; }
   }while(true);
 
-  await sb.from('game_sessions').update({current_turn:currentTurnIdx}).eq('id',sessionId);
+  // ACTUALIZACIÓN ATÓMICA: Evita que los celulares reciban el status 'active' antes que el cambio de turno.
+  const updates = { current_turn: currentTurnIdx };
+  if(newStatus) updates.status = newStatus;
+  if(clearQuestion) updates.current_question = null;
+
+  await sb.from('game_sessions').update(updates).eq('id',sessionId);
   await refreshPlayers();
   setTurnUI();
 }
